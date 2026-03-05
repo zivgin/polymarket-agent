@@ -19,10 +19,10 @@ export class MarketMatcher {
     if (Date.now() - this.cacheTime < this.CACHE_TTL && this.marketCache.length > 0) {
       return;
     }
-    console.log("  Loading markets...");
+    // loading silently
     this.marketCache = await this.client.getTopMarkets(500);
     this.cacheTime = Date.now();
-    console.log(`  Cached ${this.marketCache.length} markets`);
+    // cached silently
   }
 
   /**

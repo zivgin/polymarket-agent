@@ -41,9 +41,8 @@ export async function fetchTelegramChannel(
         keywords: extractKeywordsSimple(m.text),
         rawContent: m.text,
       }));
-  } catch (err: any) {
+  } catch {
     // Telegram not configured or channel not accessible - fail silently
-    console.error(`[telegram] Failed to fetch ${channelName}: ${err.message}`);
     return [];
   }
 }
