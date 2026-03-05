@@ -77,6 +77,28 @@ export interface BetRecommendation {
 
 // ── Config ──
 
+// ── Trending / Categories ──
+
+export interface TrendingEvent {
+  id: string;
+  title: string;
+  slug: string;
+  volume: number;
+  liquidity: number;
+  marketCount: number;
+  category: string;
+  markets: Market[];
+}
+
+export interface CategorySummary {
+  name: string;
+  marketCount: number;
+  totalVolume: number;
+  topMarkets: Market[];
+}
+
+// ── Config ──
+
 export interface AgentConfig {
   polymarket: {
     privateKey?: string;

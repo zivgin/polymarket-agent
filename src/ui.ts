@@ -1,5 +1,12 @@
 import chalk from "chalk";
-import type { BetRecommendation, Market, MarketMatch, NewsItem } from "./types/index.js";
+import type { BetRecommendation, Market, MarketMatch, NewsItem, TrendingEvent, CategorySummary } from "./types/index.js";
+import type { OddsResult, EdgeAnalysis } from "./utils/odds.js";
+import type { ArbOpportunity } from "./strategy/arbitrage.js";
+import type { CorrelationGroup } from "./strategy/correlation.js";
+import type { PriceAlert, AlertCheckResult } from "./alerts.js";
+import type { KeywordWatch, KeywordMatch } from "./keyword-alerts.js";
+import type { HistoryEntry } from "./history.js";
+import type { Position, Trade } from "./portfolio.js";
 
 // ── Color Palette ──
 // Financial terminal: dark bg assumed, cyan data, amber prices, green/red signals
@@ -355,6 +362,358 @@ export function printWatchlist(
     console.log(c.dim(`     since ${addedDate}`));
     console.log();
   }
+}
+
+// ── Odds Calculator ──
+
+export function printOddsConversion(result: OddsResult) {
+  printSectionHeader("Odds Conversion", "◇");
+  console.log();
+  const rows = [
+    ["probability", `${(result.probability * 100).toFixed(2)}%`],
+    ["decimal", result.decimal.toFixed(3)],
+    ["american", result.american > 0 ? `+${result.american}` : String(result.american)],
+    ["fractional", result.fractional],
+  ];
+  for (const [k, v] of rows) {
+    console.log(`  ${c.label(k.padEnd(16))} ${c.value(v)}`);
+  }
+  console.log();
+}
+
+export function printEdgeAnalysis(edge: EdgeAnalysis) {
+  printSectionHeader("Edge Analysis", "◆");
+  console.log();
+  const edgeColor = edge.edge > 0 ? c.long : c.short;
+  const evColor = edge.ev > 0 ? c.long : c.short;
+  const rows = [
+    ["your estimate", `${(edge.userProb * 100).toFixed(1)}%`],
+    ["market price", `${(edge.marketProb * 100).toFixed(1)}%`],
+    ["edge", edgeColor(`${(edge.edge * 100).toFixed(1)}%`)],
+    ["ev per $1", evColor(`$${edge.ev.toFixed(4)}`)],
+    ["kelly fraction", `${(edge.kellyFraction * 100).toFixed(1)}%`],
+    ["suggested size", c.amber(`$${edge.kellySuggested.toFixed(2)}`)],
+  ];
+  for (const [k, v] of rows) {
+    console.log(`  ${c.label(k.padEnd(16))} ${v}`);
+  }
+  console.log();
+}
+
+// ── Market Detail ──
+
+export function printMarketDetail(
+  market: Market,
+  orderbook?: { bids: { price: number; size: number }[]; asks: { price: number; size: number }[]; spread: number; midpoint: number },
+  relatedMarkets?: Market[]
+) {
+  printSectionHeader("Market Detail", "◈");
+  console.log();
+
+  console.log(`  ${c.value(market.question)}`);
+  console.log(`  ${c.dim("slug:")} ${c.label(market.slug)}`);
+  console.log(`  ${c.dim("id:")}   ${c.label(market.id)}`);
+  console.log(`  ${c.dim("cat:")}  ${c.label(market.category || "—")}  ${c.dim("ends:")} ${c.label(fmtDate(market.endDate))}`);
+  console.log();
+
+  // Prices
+  const yesPrice = market.outcomePrices[0] ?? 0;
+  const noPrice = market.outcomePrices[1] ?? 1 - yesPrice;
+  console.log(`  ${c.dim("YES")} ${priceTag(yesPrice)}   ${c.dim("NO")} ${priceTag(noPrice)}   ${c.dim("vol")} ${c.amber(fmtVol(market.volume))}  ${c.dim("liq")} ${c.amber(fmtVol(market.liquidity))}`);
+  console.log();
+
+  // Description
+  if (market.description) {
+    const desc = market.description.slice(0, 300);
+    console.log(`  ${c.dim(desc)}${market.description.length > 300 ? "..." : ""}`);
+    console.log();
+  }
+
+  // Orderbook
+  if (orderbook) {
+    console.log(`  ${c.brand("ORDER BOOK")}`);
+    console.log(`  ${c.dim("spread:")} ${c.amber((orderbook.spread * 100).toFixed(1) + "¢")}  ${c.dim("mid:")} ${c.amber((orderbook.midpoint * 100).toFixed(1) + "¢")}`);
+    console.log();
+    console.log(`  ${c.long("BIDS".padEnd(24))} ${c.short("ASKS")}`);
+    const depth = 5;
+    for (let i = 0; i < depth; i++) {
+      const bid = orderbook.bids[i];
+      const ask = orderbook.asks[i];
+      const bidStr = bid ? `${c.long((bid.price * 100).toFixed(1).padStart(5) + "¢")} ${c.dim(bid.size.toFixed(0).padStart(8))}` : c.dim("—".padStart(15));
+      const askStr = ask ? `${c.short((ask.price * 100).toFixed(1).padStart(5) + "¢")} ${c.dim(ask.size.toFixed(0).padStart(8))}` : c.dim("—".padStart(15));
+      console.log(`  ${bidStr}    ${askStr}`);
+    }
+    console.log();
+  }
+
+  // Related markets
+  if (relatedMarkets && relatedMarkets.length > 0) {
+    console.log(`  ${c.brand("RELATED MARKETS")}`);
+    for (const rm of relatedMarkets.slice(0, 5)) {
+      const rYes = rm.outcomePrices[0] ?? 0;
+      console.log(`  ${c.dim("├─")} ${c.value(rm.question.slice(0, 50).padEnd(50))} ${priceTag(rYes)}`);
+    }
+    console.log();
+  }
+}
+
+// ── Trending & Categories ──
+
+export function printTrending(events: TrendingEvent[]) {
+  printSectionHeader("Trending Events", "▲");
+  console.log();
+
+  for (let i = 0; i < events.length; i++) {
+    const e = events[i];
+    const idx = c.dim(`${String(i + 1).padStart(2)}.`);
+    console.log(`  ${idx} ${c.value(e.title.slice(0, 60))}`);
+    console.log(`     ${c.dim("vol")} ${c.amber(fmtVol(e.volume))}  ${c.dim("liq")} ${c.amber(fmtVol(e.liquidity))}  ${c.dim("markets")} ${c.value(String(e.marketCount))}  ${c.dim("cat")} ${c.label(e.category || "—")}`);
+    console.log();
+  }
+}
+
+export function printCategories(categories: CategorySummary[]) {
+  printSectionHeader("Categories", "◇");
+  console.log();
+
+  for (const cat of categories) {
+    console.log(`  ${c.brand(cat.name.padEnd(24))} ${c.value(String(cat.marketCount).padStart(4))} markets  ${c.amber(fmtVol(cat.totalVolume).padStart(10))} vol`);
+    for (const m of cat.topMarkets) {
+      const yp = m.outcomePrices[0] ?? 0;
+      console.log(`    ${c.dim("└")} ${c.dim(m.question.slice(0, 50))}  ${priceTag(yp)}`);
+    }
+  }
+  console.log();
+}
+
+// ── Arbitrage ──
+
+export function printArbitrage(opps: ArbOpportunity[]) {
+  printSectionHeader("Arbitrage Opportunities", "◆");
+  console.log();
+
+  if (opps.length === 0) {
+    console.log(c.dim("  no arbitrage opportunities found"));
+    console.log();
+    return;
+  }
+
+  for (let i = 0; i < opps.length; i++) {
+    const o = opps[i];
+    const idx = c.dim(`${String(i + 1).padStart(2)}.`);
+    const verified = o.deepVerified === true ? c.long(" [verified]") : o.deepVerified === false ? c.short(" [unverified]") : "";
+    console.log(`  ${idx} ${c.value(o.market.question.slice(0, 60))}${verified}`);
+    console.log(`     ${c.dim("buy YES")} ${priceTag(o.effectiveYes ?? o.yesPrice)} + ${c.dim("NO")} ${priceTag(o.effectiveNo ?? o.noPrice)} = ${c.amber((o.totalCost * 100).toFixed(1) + "¢")}  ${c.long("profit " + o.profitCents + "¢/share")}`);
+    console.log();
+  }
+}
+
+// ── Alerts ──
+
+export function printAlerts(alerts: PriceAlert[]) {
+  printSectionHeader("Price Alerts", "◈");
+  console.log();
+
+  if (alerts.length === 0) {
+    console.log(c.dim("  no alerts set — use: alert add <query> --side YES --above 0.75"));
+    console.log();
+    return;
+  }
+
+  for (let i = 0; i < alerts.length; i++) {
+    const a = alerts[i];
+    const idx = c.dim(`${String(i + 1).padStart(2)}.`);
+    const statusIcon = a.triggered ? c.long("●") : c.dim("○");
+    const triggerStr = `${a.side} ${a.direction} ${(a.threshold * 100).toFixed(0)}¢`;
+    console.log(`  ${idx} ${statusIcon} ${c.value(a.marketQuestion.slice(0, 50))}  ${c.amber(triggerStr)}`);
+    if (a.triggered) {
+      console.log(`     ${c.long("triggered")} ${c.dim(a.triggeredAt ?? "")}`);
+    }
+  }
+  console.log();
+}
+
+export function printAlertChecks(results: AlertCheckResult[]) {
+  const triggered = results.filter((r) => r.triggered);
+  if (triggered.length > 0) {
+    console.log(c.warn("  ┌─────────────────────────────────────────┐"));
+    console.log(c.warn("  │") + c.value("  ALERTS TRIGGERED                        ") + c.warn("│"));
+    console.log(c.warn("  └─────────────────────────────────────────┘"));
+    for (const r of triggered) {
+      console.log(`  ${c.long("●")} ${c.value(r.alert.marketQuestion.slice(0, 50))}`);
+      console.log(`    ${r.alert.side} now ${priceTag(r.currentPrice)} (threshold: ${r.alert.direction} ${(r.alert.threshold * 100).toFixed(0)}¢)`);
+    }
+    console.log();
+  } else {
+    console.log(c.dim(`  checked ${results.length} alerts — none triggered`));
+  }
+}
+
+// ── Keyword Alerts ──
+
+export function printKeywords(keywords: KeywordWatch[]) {
+  printSectionHeader("Keyword Watches", "◈");
+  console.log();
+
+  if (keywords.length === 0) {
+    console.log(c.dim("  no keywords set — use: kw add <keyword>"));
+    console.log();
+    return;
+  }
+
+  for (let i = 0; i < keywords.length; i++) {
+    const kw = keywords[i];
+    const idx = c.dim(`${String(i + 1).padStart(2)}.`);
+    console.log(`  ${idx} ${c.value(kw.keyword)}  ${c.dim("since " + new Date(kw.addedAt).toLocaleDateString())}`);
+  }
+  console.log();
+}
+
+export function printKeywordMatches(matches: KeywordMatch[]) {
+  if (matches.length === 0) return;
+
+  console.log(c.warn("  ┌─────────────────────────────────────────┐"));
+  console.log(c.warn("  │") + c.value("  KEYWORD MATCHES                         ") + c.warn("│"));
+  console.log(c.warn("  └─────────────────────────────────────────┘"));
+  for (const m of matches) {
+    console.log(`  ${c.brand(m.keyword.padEnd(16))} ${c.value(m.newsTitle.slice(0, 60))}`);
+  }
+  console.log();
+}
+
+// ── History ──
+
+export function printHistory(entries: HistoryEntry[]) {
+  printSectionHeader("Recommendation History", "◇");
+  console.log();
+
+  if (entries.length === 0) {
+    console.log(c.dim("  no recommendations logged yet"));
+    console.log();
+    return;
+  }
+
+  for (let i = 0; i < entries.length; i++) {
+    const e = entries[i];
+    const idx = c.dim(`${String(i + 1).padStart(2)}.`);
+    const resIcon = e.resolution === "correct" ? c.long("✓") : e.resolution === "incorrect" ? c.short("✗") : c.dim("○");
+    const date = new Date(e.recordedAt).toLocaleDateString("en-US", { month: "short", day: "numeric" });
+    console.log(`  ${idx} ${resIcon} ${c.value(e.marketQuestion.slice(0, 50))}`);
+    console.log(`     ${e.side === "YES" ? c.long("YES") : c.short("NO")} @ ${priceTag(e.priceAtRec)}  ${c.dim("conf")} ${c.value((e.confidence * 100).toFixed(0) + "%")}  ${c.dim("ev")} ${c.value("$" + e.expectedValue.toFixed(3))}  ${c.dim(date)}`);
+    console.log();
+  }
+}
+
+export function printAccuracyStats(stats: {
+  total: number; resolved: number; correct: number; incorrect: number;
+  pending: number; winRate: number; avgEV: number; avgConfidence: number;
+}) {
+  printSectionHeader("Accuracy Stats", "◆");
+  console.log();
+
+  const winColor = stats.winRate >= 0.5 ? c.long : c.short;
+  const rows = [
+    ["total recs", String(stats.total)],
+    ["resolved", `${stats.resolved} (${stats.correct} correct, ${stats.incorrect} incorrect)`],
+    ["pending", String(stats.pending)],
+    ["win rate", winColor(`${(stats.winRate * 100).toFixed(1)}%`)],
+    ["avg EV", `$${stats.avgEV.toFixed(4)}`],
+    ["avg confidence", `${(stats.avgConfidence * 100).toFixed(1)}%`],
+  ];
+  for (const [k, v] of rows) {
+    console.log(`  ${c.label(k.padEnd(16))} ${c.value(v)}`);
+  }
+  console.log();
+}
+
+// ── Correlation ──
+
+export function printCorrelation(groups: CorrelationGroup[]) {
+  printSectionHeader("Market Correlation", "◉");
+  console.log();
+
+  if (groups.length === 0) {
+    console.log(c.dim("  no multi-market events found"));
+    console.log();
+    return;
+  }
+
+  for (const g of groups) {
+    const anomalyLabel = g.anomaly
+      ? g.anomalyType === "over"
+        ? c.short(" [OVER-PRICED Σ>" + (g.totalYesProb * 100).toFixed(0) + "%]")
+        : c.long(" [UNDER-PRICED Σ=" + (g.totalYesProb * 100).toFixed(0) + "%]")
+      : c.dim(" [Σ=" + (g.totalYesProb * 100).toFixed(0) + "%]");
+
+    console.log(`  ${c.value(g.eventTitle.slice(0, 55))}${anomalyLabel}`);
+    for (const m of g.markets.slice(0, 6)) {
+      const yp = m.outcomePrices[0] ?? 0;
+      console.log(`    ${c.dim("├─")} ${c.dim(m.question.slice(0, 48).padEnd(48))} ${priceTag(yp)}`);
+    }
+    if (g.markets.length > 6) {
+      console.log(`    ${c.dim(`└─ ...and ${g.markets.length - 6} more`)}`);
+    }
+    console.log();
+  }
+}
+
+// ── Portfolio ──
+
+export function printPortfolio(data: {
+  balance: number;
+  positionsValue: number;
+  totalValue: number;
+  totalPnL: number;
+  positions: Array<{ marketQuestion: string; side: string; shares: number; avgCost: number; totalCost: number; currentPrice: number; currentValue: number; unrealizedPnL: number }>;
+}) {
+  printSectionHeader("Paper Portfolio", "◆");
+  console.log();
+
+  const pnlColor = data.totalPnL >= 0 ? c.long : c.short;
+  const pnlSign = data.totalPnL >= 0 ? "+" : "";
+  console.log(`  ${c.dim("cash")}       ${c.amber("$" + data.balance.toFixed(2))}`);
+  console.log(`  ${c.dim("positions")}  ${c.amber("$" + data.positionsValue.toFixed(2))}`);
+  console.log(`  ${c.dim("total")}      ${c.value("$" + data.totalValue.toFixed(2))}  ${pnlColor(pnlSign + "$" + data.totalPnL.toFixed(2))}`);
+  console.log();
+
+  if (data.positions.length === 0) {
+    console.log(c.dim("  no open positions — use: portfolio buy <query> <amount>"));
+    console.log();
+    return;
+  }
+
+  for (let i = 0; i < data.positions.length; i++) {
+    const p = data.positions[i];
+    const idx = c.dim(`${String(i + 1).padStart(2)}.`);
+    const pnlC = p.unrealizedPnL >= 0 ? c.long : c.short;
+    const pnlS = p.unrealizedPnL >= 0 ? "+" : "";
+    console.log(`  ${idx} ${c.value(p.marketQuestion.slice(0, 50))}`);
+    console.log(`     ${p.side === "YES" ? c.long("YES") : c.short("NO")} ${c.dim("shares")} ${c.value(p.shares.toFixed(1))}  ${c.dim("avg")} ${priceTag(p.avgCost)}  ${c.dim("now")} ${priceTag(p.currentPrice)}  ${pnlC(pnlS + "$" + p.unrealizedPnL.toFixed(2))}`);
+    console.log();
+  }
+}
+
+export function printTradeHistory(trades: Trade[]) {
+  printSectionHeader("Trade History", "◇");
+  console.log();
+
+  if (trades.length === 0) {
+    console.log(c.dim("  no trades yet"));
+    console.log();
+    return;
+  }
+
+  for (const t of trades) {
+    const typeIcon = t.type === "buy" ? c.long("BUY ") : c.short("SELL");
+    const date = new Date(t.timestamp).toLocaleDateString("en-US", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+    let line = `  ${typeIcon} ${c.value(t.marketQuestion.slice(0, 40))}  ${t.side} @ ${priceTag(t.price)}  ${c.amber("$" + t.total.toFixed(2))}`;
+    if (t.pnl !== undefined) {
+      const pnlC = t.pnl >= 0 ? c.long : c.short;
+      line += `  ${pnlC((t.pnl >= 0 ? "+" : "") + "$" + t.pnl.toFixed(2))}`;
+    }
+    console.log(line + `  ${c.dim(date)}`);
+  }
+  console.log();
 }
 
 // ── Utility ──

@@ -1,5 +1,5 @@
 import axios, { type AxiosInstance } from "axios";
-import type { Market, OrderBook, Token } from "../types/index.js";
+import type { Market, OrderBook, Token, TrendingEvent, CategorySummary } from "../types/index.js";
 
 const GAMMA_BASE = "https://gamma-api.polymarket.com";
 const CLOB_BASE = "https://clob.polymarket.com";
@@ -170,6 +170,75 @@ export class PolymarketClient {
       .slice(0, limit);
   }
 
+  // ── Market Detail (slug / ID resolution) ──
+
+  async getMarketBySlug(slug: string): Promise<Market | null> {
+    try {
+      const { data } = await this.gamma.get(`/markets/${slug}`);
+      if (!data) return null;
+      const markets = this.normalizeMarkets(Array.isArray(data) ? data : [data]);
+      return markets[0] ?? null;
+    } catch {
+      // Try searching by slug as fallback
+      const markets = await this.getActiveMarkets({ limit: 500 });
+      return markets.find((m) => m.slug === slug || m.id === slug) ?? null;
+    }
+  }
+
+  // ── Trending & Categories ──
+
+  async getTrendingEvents(limit = 20): Promise<TrendingEvent[]> {
+    const events = await this.getEvents({ limit: 100, active: true });
+
+    const trending: TrendingEvent[] = events
+      .map((e: any) => {
+        const markets = this.normalizeMarkets(e.markets ?? []);
+        const volume = markets.reduce((s, m) => s + m.volume, 0);
+        const liquidity = markets.reduce((s, m) => s + m.liquidity, 0);
+        return {
+          id: e.id ?? "",
+          title: e.title ?? e.slug ?? "",
+          slug: e.slug ?? "",
+          volume,
+          liquidity,
+          marketCount: markets.length,
+          category: (typeof e.tags?.[0] === "string" ? e.tags[0] : e.tags?.[0]?.label ?? e.tags?.[0]?.slug ?? markets[0]?.category) ?? "",
+          markets,
+        };
+      })
+      .sort((a: TrendingEvent, b: TrendingEvent) => b.volume - a.volume)
+      .slice(0, limit);
+
+    return trending;
+  }
+
+  async getCategories(): Promise<CategorySummary[]> {
+    const markets = await this.getActiveMarkets({ limit: 500 });
+    const catMap = new Map<string, { markets: Market[]; volume: number }>();
+
+    for (const m of markets) {
+      const cat = m.category || "Other";
+      const entry = catMap.get(cat) ?? { markets: [], volume: 0 };
+      entry.markets.push(m);
+      entry.volume += m.volume;
+      catMap.set(cat, entry);
+    }
+
+    const categories: CategorySummary[] = [];
+    for (const [name, { markets: catMarkets, volume }] of catMap) {
+      catMarkets.sort((a, b) => b.volume - a.volume);
+      categories.push({
+        name,
+        marketCount: catMarkets.length,
+        totalVolume: volume,
+        topMarkets: catMarkets.slice(0, 3),
+      });
+    }
+
+    categories.sort((a, b) => b.totalVolume - a.totalVolume);
+    return categories;
+  }
+
   // ── Normalization ──
 
   private normalizeMarkets(raw: any[]): Market[] {
@@ -188,7 +257,7 @@ export class PolymarketClient {
         id: m.id ?? m.condition_id ?? "",
         question: m.question ?? "",
         slug: m.slug ?? "",
-        category: m.category ?? m.tags?.[0] ?? "",
+        category: m.category || (typeof m.tags?.[0] === "string" ? m.tags[0] : m.tags?.[0]?.label ?? m.tags?.[0]?.slug ?? "") || "",
         endDate: m.end_date_iso ?? m.endDate ?? "",
         active: m.active ?? true,
         closed: m.closed ?? false,

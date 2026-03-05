@@ -4,3 +4,7 @@ dist/
 *.log
 src/debug.ts
 .watchlist.json
+.alerts.json
+.history.json
+.keywords.json
+.portfolio.json

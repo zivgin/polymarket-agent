@@ -22,9 +22,32 @@ import {
   printNoRecommendations,
   printConfigStatus,
   printWatchlist,
+  printOddsConversion,
+  printEdgeAnalysis,
+  printMarketDetail,
+  printTrending,
+  printCategories,
+  printArbitrage,
+  printAlerts,
+  printAlertChecks,
+  printKeywords,
+  printKeywordMatches,
+  printHistory,
+  printAccuracyStats,
+  printCorrelation,
+  printPortfolio,
+  printTradeHistory,
 } from "./ui.js";
 import { addToWatchlist, removeFromWatchlist, getWatchlist, clearWatchlist } from "./watchlist.js";
 import { isTelegramConfigured } from "./news/index.js";
+import { convertOdds, calculateEdge } from "./utils/odds.js";
+import { exportMarkets, exportRecommendations, exportWatchlist } from "./export.js";
+import { ArbitrageScanner } from "./strategy/arbitrage.js";
+import { CorrelationAnalyzer } from "./strategy/correlation.js";
+import { addAlert, removeAlert, getAlerts, checkAlerts } from "./alerts.js";
+import { addKeyword, removeKeyword, getKeywords, matchKeywordsToNews } from "./keyword-alerts.js";
+import { getHistory, logRecommendations, updateResolutions, getAccuracyStats } from "./history.js";
+import { getPortfolioValue, buyPosition, sellPosition, resetPortfolio, getTradeHistory } from "./portfolio.js";
 import type { BetRecommendation, Market, MarketMatch, NewsItem } from "./types/index.js";
 
 const config = loadConfig();
@@ -47,6 +70,7 @@ program
   .option("-l, --limit <n>", "Max news items to process", "20")
   .option("--rss-only", "Only use RSS feeds")
   .option("--min-confidence <n>", "Min confidence threshold", String(config.trading.minConfidence))
+  .option("--export <file>", "Export results to file (.json or .csv)")
   .action(async (opts) => {
     printHeader();
 
@@ -88,8 +112,14 @@ program
     if (allRecs.length > 0) {
       allRecs.sort((a, b) => b.expectedValue - a.expectedValue);
       printRecommendations(allRecs.slice(0, 15));
+      logRecommendations(allRecs.slice(0, 15));
     } else {
       printNoRecommendations();
+    }
+
+    if (opts.export) {
+      exportRecommendations(allRecs, opts.export);
+      printStatus(`exported to ${opts.export}`, "ok");
     }
 
     printTimestamp();
@@ -102,6 +132,7 @@ program
   .option("-l, --limit <n>", "Number of markets", "20")
   .option("-s, --search <query>", "Search markets")
   .option("-c, --category <tag>", "Filter by category")
+  .option("--export <file>", "Export results to file (.json or .csv)")
   .action(async (opts) => {
     printHeader();
 
@@ -126,6 +157,12 @@ program
     printSectionHeader("Markets", "◈");
     console.log();
     printMarkets(markets);
+
+    if (opts.export) {
+      exportMarkets(markets, opts.export);
+      printStatus(`exported to ${opts.export}`, "ok");
+    }
+
     printTimestamp();
   });
 
@@ -302,9 +339,21 @@ program
     }
     console.log();
 
-    // Watchlist count
+    // Feature counts
     const wl = getWatchlist();
-    console.log(`  ${chalk.hex("#6B7280")("watchlist")}          ${chalk.hex("#E5E7EB")(`${wl.length} markets`)}`);
+    const alerts = getAlerts();
+    const keywords = getKeywords();
+    const history = getHistory();
+    const stats = getAccuracyStats();
+    const featureLines: [string, string][] = [
+      ["watchlist", `${wl.length} markets`],
+      ["alerts", `${alerts.length} active`],
+      ["keywords", `${keywords.length} watches`],
+      ["history", `${history.length} recs (${(stats.winRate * 100).toFixed(0)}% win rate)`],
+    ];
+    for (const [k, v] of featureLines) {
+      console.log(`  ${chalk.hex("#6B7280")(k.padEnd(18))} ${chalk.hex("#E5E7EB")(v)}`);
+    }
     console.log();
 
     printTimestamp();
@@ -411,6 +460,475 @@ watchCmd
   .action(() => {
     clearWatchlist();
     printStatus("watchlist cleared", "ok");
+  });
+
+// ── odds ──
+program
+  .command("odds")
+  .description("Convert odds between formats and calculate edge vs market")
+  .argument("<value>", "Odds value to convert")
+  .option("-f, --format <format>", "Input format: prob, decimal, american", "prob")
+  .option("-m, --market <query>", "Compare against a market")
+  .action(async (valueStr, opts) => {
+    printHeader();
+
+    const value = Number(valueStr);
+    if (isNaN(value)) {
+      printStatus("invalid number", "err");
+      return;
+    }
+
+    const result = convertOdds(value, opts.format);
+    printOddsConversion(result);
+
+    if (opts.market) {
+      printStatus(`searching market: "${opts.market}"...`);
+      const markets = await polymarket.searchMarkets(opts.market, 1);
+      if (markets.length > 0) {
+        const marketProb = markets[0].outcomePrices[0] ?? 0;
+        const edge = calculateEdge(result.probability, marketProb);
+        printEdgeAnalysis(edge);
+        printStatus(`market: "${markets[0].question.slice(0, 55)}"`, "ok");
+      } else {
+        printStatus("market not found", "warn");
+      }
+    }
+
+    printTimestamp();
+  });
+
+// ── market (detail) ──
+program
+  .command("market")
+  .description("Show detailed market info with orderbook")
+  .argument("<id>", "Market slug, ID, or condition_id")
+  .action(async (id) => {
+    printHeader();
+
+    printStatus(`resolving market: "${id}"...`);
+
+    // Try slug first, then condition ID, then search
+    let market = await polymarket.getMarketBySlug(id);
+    if (!market) {
+      market = await polymarket.getMarketByConditionId(id);
+    }
+    if (!market) {
+      const results = await polymarket.searchMarkets(id, 1);
+      market = results[0] ?? null;
+    }
+
+    if (!market) {
+      printStatus("market not found", "err");
+      return;
+    }
+
+    printStatus(`found: "${market.question.slice(0, 55)}"`, "ok");
+
+    // Get orderbook if YES token exists
+    let orderbook;
+    const yesToken = market.tokens.find((t) => t.outcome === "Yes" || t.outcome === "YES");
+    if (yesToken?.token_id) {
+      try {
+        orderbook = await polymarket.getOrderBook(yesToken.token_id);
+      } catch {
+        // skip
+      }
+    }
+
+    // Get related markets from same event
+    let relatedMarkets: Market[] = [];
+    try {
+      const events = await polymarket.getEvents({ limit: 50, active: true });
+      for (const event of events) {
+        const eventMarkets = event.markets ?? [];
+        if (eventMarkets.some((m: any) => m.id === market!.id || m.condition_id === market!.id)) {
+          relatedMarkets = eventMarkets
+            .filter((m: any) => m.id !== market!.id && m.condition_id !== market!.id)
+            .map((m: any) => ({
+              id: m.id ?? "",
+              question: m.question ?? "",
+              slug: m.slug ?? "",
+              category: m.category ?? "",
+              endDate: m.end_date_iso ?? "",
+              active: m.active ?? true,
+              closed: m.closed ?? false,
+              tokens: [],
+              volume: Number(m.volume ?? 0),
+              liquidity: Number(m.liquidity ?? 0),
+              outcomes: m.outcomes ?? [],
+              outcomePrices: Array.isArray(m.outcomePrices) ? m.outcomePrices.map(Number) : [],
+              description: "",
+              tags: m.tags ?? [],
+            }));
+          break;
+        }
+      }
+    } catch {
+      // skip
+    }
+
+    printMarketDetail(market, orderbook, relatedMarkets);
+    printTimestamp();
+  });
+
+// ── trending ──
+program
+  .command("trending")
+  .description("Show trending events by volume")
+  .option("-l, --limit <n>", "Number of events", "15")
+  .action(async (opts) => {
+    printHeader();
+
+    printStatus("loading trending events...");
+    const events = await polymarket.getTrendingEvents(Number(opts.limit));
+    printStatus(`${events.length} trending events`, "ok");
+    printTrending(events);
+    printTimestamp();
+  });
+
+// ── categories ──
+program
+  .command("categories")
+  .description("Show market categories with counts and volume")
+  .action(async () => {
+    printHeader();
+
+    printStatus("loading categories...");
+    const categories = await polymarket.getCategories();
+    printStatus(`${categories.length} categories`, "ok");
+    printCategories(categories);
+    printTimestamp();
+  });
+
+// ── export ──
+program
+  .command("export")
+  .description("Export data to JSON or CSV")
+  .argument("<type>", "Data type: markets, watchlist, scan")
+  .argument("<file>", "Output file path (.json or .csv)")
+  .option("-l, --limit <n>", "Max items for markets export", "50")
+  .option("-s, --search <query>", "Search filter for markets")
+  .action(async (type, file, opts) => {
+    printHeader();
+
+    if (type === "markets") {
+      printStatus("fetching markets...");
+      let markets: Market[];
+      if (opts.search) {
+        markets = await polymarket.searchMarkets(opts.search, Number(opts.limit));
+      } else {
+        markets = await polymarket.getTopMarkets(Number(opts.limit));
+      }
+      exportMarkets(markets, file);
+      printStatus(`exported ${markets.length} markets to ${file}`, "ok");
+    } else if (type === "watchlist") {
+      const entries = getWatchlist();
+      exportWatchlist(entries, file);
+      printStatus(`exported ${entries.length} watchlist entries to ${file}`, "ok");
+    } else if (type === "scan") {
+      printStatus("running scan for export...");
+      const news = await newsAgg.fetchAll();
+      const allRecs: BetRecommendation[] = [];
+      for (const item of news.slice(0, 20)) {
+        const matches = await matcher.findMatchingMarkets(item, 5);
+        if (matches.length > 0) {
+          const recs = recommender.recommend(item, matches);
+          allRecs.push(...recs);
+        }
+      }
+      exportRecommendations(allRecs, file);
+      printStatus(`exported ${allRecs.length} recommendations to ${file}`, "ok");
+    } else {
+      printStatus(`unknown type: ${type} (use: markets, watchlist, scan)`, "err");
+    }
+
+    printTimestamp();
+  });
+
+// ── arb ──
+program
+  .command("arb")
+  .description("Scan for arbitrage opportunities (YES+NO < $1)")
+  .option("--deep", "Verify with orderbook depth")
+  .option("-l, --min-profit <cents>", "Minimum profit in cents", "1")
+  .action(async (opts) => {
+    printHeader();
+
+    const scanner = new ArbitrageScanner(polymarket);
+    printStatus(`scanning for arbitrage${opts.deep ? " (deep verification)..." : "..."}`);
+    const opps = await scanner.scan({
+      deep: opts.deep,
+      minProfitCents: Number(opts.minProfit),
+    });
+    printStatus(`${opps.length} opportunities found`, opps.length > 0 ? "ok" : "info");
+    printArbitrage(opps);
+    printTimestamp();
+  });
+
+// ── alert ──
+const alertCmd = program
+  .command("alert")
+  .description("Manage price alerts on markets");
+
+alertCmd
+  .command("add")
+  .description("Set a price alert")
+  .argument("<query>", "Market search query")
+  .option("--side <side>", "YES or NO", "YES")
+  .option("--above <price>", "Alert when price goes above threshold")
+  .option("--below <price>", "Alert when price goes below threshold")
+  .action(async (query, opts) => {
+    printHeader();
+
+    const side = opts.side.toUpperCase() as "YES" | "NO";
+    const direction = opts.above ? "above" : "below";
+    const threshold = Number(opts.above ?? opts.below);
+
+    if (!threshold || isNaN(threshold)) {
+      printStatus("specify --above or --below with a price (e.g., 0.75)", "err");
+      return;
+    }
+
+    printStatus(`searching: "${query}"...`);
+    const alert = await addAlert(polymarket, query, side, direction, threshold);
+    if (alert) {
+      printStatus(`alert set: ${side} ${direction} ${(threshold * 100).toFixed(0)}¢ on "${alert.marketQuestion.slice(0, 50)}"`, "ok");
+    } else {
+      printStatus("no markets found", "warn");
+    }
+    printTimestamp();
+  });
+
+alertCmd
+  .command("list")
+  .description("Show all alerts")
+  .action(() => {
+    printHeader();
+    printAlerts(getAlerts());
+    printTimestamp();
+  });
+
+alertCmd
+  .command("rm")
+  .description("Remove an alert")
+  .argument("<index>", "Alert index (1-based)")
+  .action((indexStr) => {
+    const removed = removeAlert(Number(indexStr) - 1);
+    if (removed) {
+      printStatus(`removed alert on "${removed.marketQuestion.slice(0, 50)}"`, "ok");
+    } else {
+      printStatus("invalid index", "err");
+    }
+  });
+
+alertCmd
+  .command("watch")
+  .description("Poll alerts for triggers")
+  .option("-i, --interval <seconds>", "Poll interval", "60")
+  .action(async (opts) => {
+    printHeader();
+    printSectionHeader("Alert Monitor", "◈");
+    console.log(chalk.hex("#4B5563")(`  polling every ${opts.interval}s — ctrl+c to exit`));
+    console.log();
+
+    const poll = async () => {
+      const results = await checkAlerts(polymarket);
+      printAlertChecks(results);
+    };
+
+    await poll();
+    setInterval(poll, Number(opts.interval) * 1000);
+  });
+
+// ── kw (keyword alerts) ──
+const kwCmd = program
+  .command("kw")
+  .description("Manage news keyword watches");
+
+kwCmd
+  .command("add")
+  .description("Watch for a keyword in news")
+  .argument("<keyword>", "Keyword to watch")
+  .action((keyword) => {
+    const kw = addKeyword(keyword);
+    printStatus(`watching: "${kw.keyword}"`, "ok");
+  });
+
+kwCmd
+  .command("list")
+  .description("Show all keyword watches")
+  .action(() => {
+    printHeader();
+    printKeywords(getKeywords());
+    printTimestamp();
+  });
+
+kwCmd
+  .command("rm")
+  .description("Remove a keyword watch")
+  .argument("<index>", "Index (1-based)")
+  .action((indexStr) => {
+    const removed = removeKeyword(Number(indexStr) - 1);
+    if (removed) {
+      printStatus(`removed: "${removed.keyword}"`, "ok");
+    } else {
+      printStatus("invalid index", "err");
+    }
+  });
+
+kwCmd
+  .command("scan")
+  .description("Scan current news for keyword matches")
+  .action(async () => {
+    printHeader();
+
+    printStatus("fetching news...");
+    const news = await newsAgg.fetchAll();
+    const matches = matchKeywordsToNews(news);
+
+    if (matches.length > 0) {
+      printKeywordMatches(matches);
+      // Auto-search for matching markets
+      printStatus("searching for related markets...");
+      for (const m of matches.slice(0, 5)) {
+        const markets = await polymarket.searchMarkets(m.keyword, 3);
+        if (markets.length > 0) {
+          printStatus(`"${m.keyword}" → ${markets.length} markets`, "ok");
+          for (const market of markets.slice(0, 2)) {
+            const yp = market.outcomePrices[0] ?? 0;
+            console.log(chalk.hex("#006B7A")(`    └─ `) + chalk.hex("#E5E7EB")(market.question.slice(0, 50)));
+          }
+        }
+      }
+    } else {
+      printStatus("no keyword matches in current news", "info");
+    }
+
+    printTimestamp();
+  });
+
+// ── history ──
+program
+  .command("history")
+  .description("View recommendation history and accuracy")
+  .option("--update", "Check for resolved markets and update stats")
+  .option("-l, --limit <n>", "Number of entries to show", "20")
+  .action(async (opts) => {
+    printHeader();
+
+    if (opts.update) {
+      printStatus("updating resolutions...");
+      const result = await updateResolutions(polymarket);
+      printStatus(`updated ${result.updated} entries (${result.correct}W / ${result.incorrect}L / ${result.pending}P)`, "ok");
+    }
+
+    const entries = getHistory(Number(opts.limit));
+    printHistory(entries);
+    printAccuracyStats(getAccuracyStats());
+    printTimestamp();
+  });
+
+// ── correlate ──
+program
+  .command("correlate")
+  .description("Analyze probability correlations across related markets")
+  .argument("[query]", "Optional category/tag filter")
+  .option("--all", "Show all groups, not just anomalies")
+  .action(async (query, opts) => {
+    printHeader();
+
+    printStatus("analyzing market correlations...");
+    const analyzer = new CorrelationAnalyzer(polymarket);
+    let groups = await analyzer.analyze(query);
+
+    if (!opts.all) {
+      const anomalies = groups.filter((g) => g.anomaly);
+      if (anomalies.length > 0) groups = anomalies;
+    }
+
+    printStatus(`${groups.length} event groups analyzed`, "ok");
+    printCorrelation(groups);
+    printTimestamp();
+  });
+
+// ── portfolio ──
+const portfolioCmd = program
+  .command("portfolio")
+  .description("Paper trading portfolio simulator");
+
+portfolioCmd
+  .command("show")
+  .description("Show portfolio summary")
+  .action(async () => {
+    printHeader();
+
+    printStatus("fetching portfolio...");
+    const data = await getPortfolioValue(polymarket);
+    printPortfolio(data);
+    printTimestamp();
+  });
+
+portfolioCmd
+  .command("buy")
+  .description("Buy shares in a market")
+  .argument("<query>", "Market search query")
+  .argument("<amount>", "Dollar amount to invest")
+  .option("--side <side>", "YES or NO", "YES")
+  .action(async (query, amountStr, opts) => {
+    printHeader();
+
+    const amount = Number(amountStr);
+    if (isNaN(amount) || amount <= 0) {
+      printStatus("invalid amount", "err");
+      return;
+    }
+
+    printStatus(`buying $${amount} ${opts.side} on "${query}"...`);
+    const result = await buyPosition(polymarket, query, amount, opts.side.toUpperCase());
+    if ("error" in result) {
+      printStatus(result.error, "err");
+    } else {
+      printStatus(`bought ${result.trade.shares.toFixed(1)} shares @ ${(result.trade.price * 100).toFixed(0)}¢ = $${result.trade.total.toFixed(2)}`, "ok");
+      printStatus(`"${result.position.marketQuestion.slice(0, 55)}"`, "info");
+    }
+    printTimestamp();
+  });
+
+portfolioCmd
+  .command("sell")
+  .description("Sell a position")
+  .argument("<index>", "Position index (1-based)")
+  .action(async (indexStr) => {
+    printHeader();
+
+    printStatus("selling position...");
+    const result = await sellPosition(polymarket, Number(indexStr) - 1);
+    if ("error" in result) {
+      printStatus(result.error, "err");
+    } else {
+      const pnlStr = result.pnl >= 0 ? `+$${result.pnl.toFixed(2)}` : `-$${Math.abs(result.pnl).toFixed(2)}`;
+      printStatus(`sold for $${result.trade.total.toFixed(2)} (${pnlStr})`, "ok");
+    }
+    printTimestamp();
+  });
+
+portfolioCmd
+  .command("reset")
+  .description("Reset portfolio to $1000")
+  .action(() => {
+    resetPortfolio();
+    printStatus("portfolio reset to $1,000", "ok");
+  });
+
+portfolioCmd
+  .command("history")
+  .description("Show trade history")
+  .option("-l, --limit <n>", "Number of trades", "20")
+  .action((opts) => {
+    printHeader();
+    const trades = getTradeHistory(Number(opts.limit));
+    printTradeHistory(trades);
+    printTimestamp();
   });
 
 program.parse();
