@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { Command } from "commander";
+import chalk from "chalk";
 import { loadConfig } from "./config.js";
 import { PolymarketClient } from "./clients/polymarket.js";
 import { NewsAggregator } from "./news/index.js";
@@ -19,7 +20,11 @@ import {
   printLiveAlert,
   printNoMatches,
   printNoRecommendations,
+  printConfigStatus,
+  printWatchlist,
 } from "./ui.js";
+import { addToWatchlist, removeFromWatchlist, getWatchlist, clearWatchlist } from "./watchlist.js";
+import { isTelegramConfigured } from "./news/index.js";
 import type { BetRecommendation, Market, MarketMatch, NewsItem } from "./types/index.js";
 
 const config = loadConfig();
@@ -244,6 +249,168 @@ program
 
     await poll();
     setInterval(poll, interval);
+  });
+
+// ── status ──
+program
+  .command("status")
+  .description("Show system configuration status")
+  .action(async () => {
+    printHeader();
+
+    const checks = [
+      {
+        name: "Polymarket API",
+        ok: true, // Always available for reads
+        detail: "public endpoints (read-only)",
+      },
+      {
+        name: "Polymarket Trade",
+        ok: !!config.polymarket.privateKey,
+        detail: config.polymarket.privateKey ? "wallet connected" : "set POLYMARKET_PRIVATE_KEY",
+      },
+      {
+        name: "RSS Feeds",
+        ok: config.news.rssFeeds.length > 0,
+        detail: `${config.news.rssFeeds.length} feeds configured`,
+      },
+      {
+        name: "Telegram",
+        ok: await isTelegramConfigured(),
+        detail: !config.telegram.apiId ? "set TELEGRAM_API_ID + API_HASH" : "checking...",
+      },
+      {
+        name: "Firecrawl",
+        ok: !!config.firecrawl.apiKey,
+        detail: config.firecrawl.apiKey ? "api key set" : "set FIRECRAWL_API_KEY",
+      },
+    ];
+
+    printConfigStatus(checks);
+
+    // Trading config
+    printSectionHeader("Trading Config", "◇");
+    console.log();
+    const tc = config.trading;
+    const lines = [
+      ["max bet size", `$${tc.maxBetSizeUsd}`],
+      ["min confidence", `${(tc.minConfidence * 100).toFixed(0)}%`],
+      ["kelly fraction", `${(tc.kellyFraction * 100).toFixed(0)}% (half-kelly)`],
+    ];
+    for (const [k, v] of lines) {
+      console.log(`  ${chalk.hex("#6B7280")(k.padEnd(18))} ${chalk.hex("#E5E7EB")(v)}`);
+    }
+    console.log();
+
+    // Watchlist count
+    const wl = getWatchlist();
+    console.log(`  ${chalk.hex("#6B7280")("watchlist")}          ${chalk.hex("#E5E7EB")(`${wl.length} markets`)}`);
+    console.log();
+
+    printTimestamp();
+  });
+
+// ── watch ──
+const watchCmd = program
+  .command("watch")
+  .description("Manage your market watchlist");
+
+watchCmd
+  .command("list")
+  .description("Show watchlist with current prices")
+  .action(async () => {
+    printHeader();
+
+    const entries = getWatchlist();
+    if (entries.length === 0) {
+      printWatchlist([]);
+      printTimestamp();
+      return;
+    }
+
+    // Fetch current prices for each
+    printStatus("fetching current prices...");
+    const enriched = [];
+    for (const entry of entries) {
+      let currentPrice: { yes: number; no: number } | undefined;
+      try {
+        const markets = await polymarket.searchMarkets(entry.question.slice(0, 30), 5);
+        const match = markets.find((m) => m.id === entry.id || m.slug === entry.slug);
+        if (match) {
+          currentPrice = {
+            yes: match.outcomePrices[0] ?? 0,
+            no: match.outcomePrices[1] ?? 1 - (match.outcomePrices[0] ?? 0),
+          };
+        }
+      } catch {
+        // skip price fetch errors
+      }
+      enriched.push({ ...entry, currentPrice });
+    }
+
+    printWatchlist(enriched);
+    printTimestamp();
+  });
+
+watchCmd
+  .command("add")
+  .description("Add a market to watchlist by search")
+  .argument("<query>", "Market search query")
+  .option("-n, --notes <text>", "Notes for this watch")
+  .action(async (query, opts) => {
+    printHeader();
+
+    printStatus(`searching: "${query}"...`);
+    const markets = await polymarket.searchMarkets(query, 5);
+
+    if (markets.length === 0) {
+      printStatus("no markets found", "warn");
+      return;
+    }
+
+    // Add the top result
+    const market = markets[0];
+    const yesPrice = market.outcomePrices[0] ?? 0;
+    const noPrice = market.outcomePrices[1] ?? 1 - yesPrice;
+
+    addToWatchlist({
+      id: market.id,
+      question: market.question,
+      slug: market.slug,
+      addedAt: new Date().toISOString(),
+      addedPrice: { yes: yesPrice, no: noPrice },
+      notes: opts.notes,
+    });
+
+    printStatus(`added: "${market.question.slice(0, 55)}"`, "ok");
+    printStatus(`price at add: YES ${(yesPrice * 100).toFixed(0)}¢ / NO ${(noPrice * 100).toFixed(0)}¢`);
+    printTimestamp();
+  });
+
+watchCmd
+  .command("rm")
+  .description("Remove a market from watchlist")
+  .argument("<index>", "Index from watch list (1-based)")
+  .action(async (indexStr) => {
+    const entries = getWatchlist();
+    const idx = Number(indexStr) - 1;
+
+    if (idx < 0 || idx >= entries.length) {
+      printStatus(`invalid index: ${indexStr} (have ${entries.length} entries)`, "err");
+      return;
+    }
+
+    const entry = entries[idx];
+    removeFromWatchlist(entry.id);
+    printStatus(`removed: "${entry.question.slice(0, 55)}"`, "ok");
+  });
+
+watchCmd
+  .command("clear")
+  .description("Clear entire watchlist")
+  .action(() => {
+    clearWatchlist();
+    printStatus("watchlist cleared", "ok");
   });
 
 program.parse();

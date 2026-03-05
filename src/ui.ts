@@ -293,6 +293,70 @@ export function printNoRecommendations() {
   console.log();
 }
 
+// ── Status Dashboard ──
+
+export function printConfigStatus(checks: { name: string; ok: boolean; detail: string }[]) {
+  printSectionHeader("System Status", "◇");
+  console.log();
+
+  for (const check of checks) {
+    const icon = check.ok ? c.long("●") : c.dim("○");
+    const status = check.ok ? c.long("ready") : c.dim("not configured");
+    console.log(
+      `  ${icon} ${c.value(check.name.padEnd(18))} ${status.padEnd(30)} ${c.dim(check.detail)}`
+    );
+  }
+  console.log();
+}
+
+// ── Watchlist ──
+
+export function printWatchlist(
+  entries: { question: string; addedPrice: { yes: number; no: number }; currentPrice?: { yes: number; no: number }; addedAt: string; notes?: string }[]
+) {
+  if (entries.length === 0) {
+    console.log(c.dim("  watchlist empty — use: watch add <market-id>"));
+    return;
+  }
+
+  printSectionHeader("Watchlist", "★");
+  console.log();
+
+  for (let i = 0; i < entries.length; i++) {
+    const e = entries[i];
+    const idx = c.dim(`${String(i + 1).padStart(2)}.`);
+
+    console.log(`  ${idx} ${c.value(e.question)}`);
+
+    // Price at add time
+    let priceLine = `     ${c.dim("added")} ${priceTag(e.addedPrice.yes)}/${priceTag(e.addedPrice.no)}`;
+
+    // Current price + delta if available
+    if (e.currentPrice) {
+      const deltaYes = e.currentPrice.yes - e.addedPrice.yes;
+      const deltaStr = deltaYes >= 0
+        ? c.long(`+${(deltaYes * 100).toFixed(0)}¢`)
+        : c.short(`${(deltaYes * 100).toFixed(0)}¢`);
+
+      priceLine += `  ${c.dim("→ now")} ${priceTag(e.currentPrice.yes)}/${priceTag(e.currentPrice.no)}  ${deltaStr}`;
+    }
+    console.log(priceLine);
+
+    if (e.notes) {
+      console.log(`     ${c.dim(e.notes)}`);
+    }
+
+    const addedDate = new Date(e.addedAt).toLocaleDateString("en-US", {
+      month: "short",
+      day: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+    console.log(c.dim(`     since ${addedDate}`));
+    console.log();
+  }
+}
+
 // ── Utility ──
 
 function priceTag(price: number): string {

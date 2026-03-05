@@ -2,13 +2,26 @@ import "dotenv/config";
 import type { AgentConfig } from "./types/index.js";
 
 const DEFAULT_RSS_FEEDS = [
+  // World news & politics
   "https://rss.nytimes.com/services/xml/rss/nyt/World.xml",
   "https://feeds.bbci.co.uk/news/world/rss.xml",
   "https://www.reutersagency.com/feed/?best-topics=political-general",
   "https://feeds.bloomberg.com/politics/news.rss",
+  "https://rss.nytimes.com/services/xml/rss/nyt/Politics.xml",
+  "https://feeds.npr.org/1001/rss.xml",
+  // Business & economics
+  "https://feeds.bloomberg.com/markets/news.rss",
+  "https://rss.nytimes.com/services/xml/rss/nyt/Business.xml",
+  // Crypto & web3
   "https://www.coindesk.com/arc/outboundfeeds/rss/",
   "https://cointelegraph.com/rss",
   "https://decrypt.co/feed",
+  "https://www.theblock.co/rss.xml",
+  // Tech
+  "https://feeds.arstechnica.com/arstechnica/index",
+  "https://rss.nytimes.com/services/xml/rss/nyt/Technology.xml",
+  // Sports (for sports betting markets)
+  "https://www.espn.com/espn/rss/news",
 ];
 
 const DEFAULT_TELEGRAM_CHANNELS = [

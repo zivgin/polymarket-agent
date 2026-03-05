@@ -3,3 +3,4 @@ dist/
 .env
 *.log
 src/debug.ts
+.watchlist.json
