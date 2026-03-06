@@ -96,6 +96,7 @@ kw add <keyword>          # Watch for keyword in news headlines
 kw list                   # Show all keyword watches
 kw rm <index>             # Remove by index
 kw scan                   # Scan current news for matches, auto-search markets
+kw scan --smart           # Smart mode: match + recommend + market signals
 ```
 
 ### Paper Trading
@@ -106,6 +107,7 @@ portfolio buy <q> <$>     # Buy shares (--side YES|NO, default YES)
 portfolio sell <index>    # Sell position at current market price
 portfolio reset           # Reset to $1,000 starting balance
 portfolio history [-l]    # Trade log
+portfolio risk            # Concentration, correlation, and hedge suggestions
 ```
 
 ### History & Accuracy
@@ -117,6 +119,72 @@ history [options]         # View recommendation log
 ```
 
 Recommendations from `scan` are automatically logged. Run `history --update` periodically to track resolution accuracy.
+
+### Price Momentum
+
+```bash
+momentum <query>          # Show price history, sparkline, and deltas (1h/6h/24h/7d)
+```
+
+Prices are automatically recorded during `scan` and `watch list`. The more you use the tool, the richer the momentum data.
+
+### Backtesting
+
+```bash
+backtest [options]        # Evaluate recommendation accuracy
+  --detailed              # Show individual trade-level results
+  --update                # Update resolutions before backtesting
+```
+
+Computes hit rate, ROI, Brier score, and calibration buckets.
+
+### Resolution Calendar
+
+```bash
+calendar [options]        # Show upcoming market resolution dates
+  -d, --days <n>          # Max days ahead (default: 90)
+  --watch                 # Only show watchlist markets
+```
+
+### Liquidity Analysis
+
+```bash
+liquidity [query]         # Analyze orderbook depth and spread quality
+  -l, --limit <n>         # Max markets (default: 10)
+```
+
+Defaults to watchlist if no query. Composite score: spread tightness (40%), bid depth (30%), ask depth (30%).
+
+### Market Comparison
+
+```bash
+compare <query1> <query2> # Side-by-side: prices, volume, orderbook, category, dates
+```
+
+### Social Signals
+
+```bash
+signals <query>           # Scan Reddit for mentions and sentiment
+  -l, --limit <n>         # Max posts (default: 25)
+```
+
+### Event Tree
+
+```bash
+event-tree [query]        # Probability tree with anomaly detection
+  -l, --limit <n>         # Max events (default: 10)
+```
+
+Groups markets by event, sums YES probabilities, flags >5% deviations from 1.0.
+
+### Daily Digest
+
+```bash
+digest [options]          # All-in-one daily report
+  --export <file>         # Export to markdown file
+```
+
+Combines: watchlist changes, triggered alerts, top recommendations, resolved bets, upcoming resolutions, and portfolio summary.
 
 ### Data Export
 
@@ -173,6 +241,7 @@ State files are stored in the project root as JSON (all gitignored):
 | `.keywords.json` | `keyword-alerts.ts` | Keyword watch list |
 | `.history.json` | `history.ts` | Recommendation log with resolution tracking |
 | `.portfolio.json` | `portfolio.ts` | Virtual balance, positions, trade history |
+| `.momentum.json` | `strategy/momentum.ts` | Price snapshots for momentum tracking |
 
 ## Tech Stack
 

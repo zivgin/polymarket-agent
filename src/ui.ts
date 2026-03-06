@@ -4,9 +4,14 @@ import type { OddsResult, EdgeAnalysis } from "./utils/odds.js";
 import type { ArbOpportunity } from "./strategy/arbitrage.js";
 import type { CorrelationGroup } from "./strategy/correlation.js";
 import type { PriceAlert, AlertCheckResult } from "./alerts.js";
-import type { KeywordWatch, KeywordMatch } from "./keyword-alerts.js";
+import type { KeywordWatch, KeywordMatch, SmartKeywordMatch } from "./keyword-alerts.js";
 import type { HistoryEntry } from "./history.js";
 import type { Position, Trade } from "./portfolio.js";
+import type {
+  MomentumResult, BacktestResult, CalendarBucket, LiquidityProfile,
+  EventTree, DigestData, SocialSignal, OrderBook,
+} from "./types/index.js";
+import type { PortfolioRisk } from "./strategy/portfolio-risk.js";
 
 // ── Color Palette ──
 // Financial terminal: dark bg assumed, cyan data, amber prices, green/red signals
@@ -714,6 +719,483 @@ export function printTradeHistory(trades: Trade[]) {
     console.log(line + `  ${c.dim(date)}`);
   }
   console.log();
+}
+
+// ── Momentum ──
+
+export function printMomentum(result: MomentumResult) {
+  printSectionHeader("Price Momentum", "▲");
+  console.log();
+
+  console.log(`  ${c.value(result.question)}`);
+  console.log(`  ${c.dim("current")} ${priceTag(result.currentPrice)}  ${c.dim("trend")} ${
+    result.trend === "up" ? c.long("▲ UP") : result.trend === "down" ? c.short("▼ DOWN") : c.dim("━ FLAT")
+  }`);
+  console.log();
+
+  // Sparkline
+  if (result.sparkline) {
+    console.log(`  ${c.dim("history")} ${c.brand(result.sparkline)}`);
+  }
+
+  // Deltas
+  const deltas = [
+    ["1h", result.deltas["1h"]],
+    ["6h", result.deltas["6h"]],
+    ["24h", result.deltas["24h"]],
+    ["7d", result.deltas["7d"]],
+  ] as const;
+
+  let deltaLine = "  ";
+  for (const [label, val] of deltas) {
+    if (val === null) {
+      deltaLine += `${c.dim(label)} ${c.dim("—")}  `;
+    } else {
+      const sign = val >= 0 ? "+" : "";
+      const color = val > 0 ? c.long : val < 0 ? c.short : c.dim;
+      deltaLine += `${c.dim(label)} ${color(`${sign}${(val * 100).toFixed(1)}¢`)}  `;
+    }
+  }
+  console.log(deltaLine);
+  console.log();
+}
+
+// ── Backtest ──
+
+export function printBacktest(result: BacktestResult, detailed = false) {
+  printSectionHeader("Backtest Results", "◆");
+  console.log();
+
+  const hitColor = result.hitRate >= 0.5 ? c.long : c.short;
+  const roiColor = result.totalROI >= 0 ? c.long : c.short;
+  const rows: [string, string][] = [
+    ["total recs", String(result.totalRecs)],
+    ["resolved", `${result.resolved} (${result.correct}W / ${result.incorrect}L)`],
+    ["hit rate", hitColor(`${(result.hitRate * 100).toFixed(1)}%`)],
+    ["total ROI", roiColor(`${(result.totalROI * 100).toFixed(1)}%`)],
+    ["brier score", c.value(result.brierScore.toFixed(4))],
+  ];
+  for (const [k, v] of rows) {
+    console.log(`  ${c.label(k.padEnd(16))} ${v}`);
+  }
+  console.log();
+
+  // Calibration
+  if (result.calibration.length > 0) {
+    console.log(`  ${c.brand("CALIBRATION")}`);
+    for (const bucket of result.calibration) {
+      if (bucket.count === 0) continue;
+      const predBar = miniBar(bucket.predicted, 10);
+      const actBar = miniBar(bucket.actual, 10);
+      console.log(
+        `  ${c.dim(bucket.range.padEnd(10))} ` +
+        `${c.dim("pred")} ${predBar} ${c.value((bucket.predicted * 100).toFixed(0) + "%")}  ` +
+        `${c.dim("actual")} ${actBar} ${c.value((bucket.actual * 100).toFixed(0) + "%")}  ` +
+        `${c.dim("n=")}${c.value(String(bucket.count))}`
+      );
+    }
+    console.log();
+  }
+
+  // Detailed entries
+  if (detailed && result.details.length > 0) {
+    console.log(`  ${c.brand("DETAILS")}`);
+    for (const d of result.details) {
+      const resIcon = d.resolution === "correct" ? c.long("✓") : c.short("✗");
+      const pnlColor = d.pnl >= 0 ? c.long : c.short;
+      const pnlStr = d.pnl >= 0 ? `+$${d.pnl.toFixed(2)}` : `-$${Math.abs(d.pnl).toFixed(2)}`;
+      console.log(
+        `  ${resIcon} ${c.value(d.marketQuestion.slice(0, 45))}  ` +
+        `${d.side === "YES" ? c.long("YES") : c.short("NO")} @ ${priceTag(d.priceAtRec)}  ` +
+        `${c.dim("conf")} ${c.value((d.confidence * 100).toFixed(0) + "%")}  ` +
+        `${pnlColor(pnlStr)}`
+      );
+    }
+    console.log();
+  }
+}
+
+// ── Calendar ──
+
+export function printCalendar(buckets: CalendarBucket[]) {
+  printSectionHeader("Resolution Calendar", "◇");
+  console.log();
+
+  if (buckets.length === 0) {
+    console.log(c.dim("  no upcoming resolutions found"));
+    console.log();
+    return;
+  }
+
+  for (const bucket of buckets) {
+    console.log(`  ${c.brand(bucket.label.toUpperCase())}`);
+    for (const cm of bucket.markets.slice(0, 8)) {
+      const daysStr = cm.daysUntil <= 0 ? c.warn("today") : c.dim(`${cm.daysUntil}d`);
+      console.log(
+        `    ${c.dim("├─")} ${c.value(cm.market.question.slice(0, 50).padEnd(50))} ` +
+        `${priceTag(cm.yesPrice)} ${daysStr}`
+      );
+    }
+    if (bucket.markets.length > 8) {
+      console.log(`    ${c.dim(`└─ ...and ${bucket.markets.length - 8} more`)}`);
+    }
+    console.log();
+  }
+}
+
+// ── Liquidity ──
+
+export function printLiquidity(profiles: LiquidityProfile[]) {
+  printSectionHeader("Liquidity Analysis", "◈");
+  console.log();
+
+  if (profiles.length === 0) {
+    console.log(c.dim("  no liquidity data available"));
+    console.log();
+    return;
+  }
+
+  for (let i = 0; i < profiles.length; i++) {
+    const p = profiles[i];
+    const idx = c.dim(`${String(i + 1).padStart(2)}.`);
+    const scoreBar = miniBar(p.liquidityScore, 8);
+    const scoreColor = p.liquidityScore >= 0.7 ? c.long : p.liquidityScore >= 0.4 ? c.amber : c.short;
+
+    console.log(`  ${idx} ${c.value(p.market.question.slice(0, 55))}`);
+    console.log(
+      `     ${c.dim("score")} ${scoreBar} ${scoreColor((p.liquidityScore * 100).toFixed(0) + "%")}  ` +
+      `${c.dim("spread")} ${c.amber((p.spread * 100).toFixed(1) + "¢")}  ` +
+      `${c.dim("mid")} ${priceTag(p.midpoint)}`
+    );
+    console.log(
+      `     ${c.dim("bid $")}${c.long(fmtVol(p.totalBidLiquidity))} ` +
+      `${c.dim("ask $")}${c.short(fmtVol(p.totalAskLiquidity))}`
+    );
+
+    // Mini depth view
+    if (p.bidDepth.length > 0 || p.askDepth.length > 0) {
+      const depth = Math.min(3, Math.max(p.bidDepth.length, p.askDepth.length));
+      for (let d = 0; d < depth; d++) {
+        const bid = p.bidDepth[d];
+        const ask = p.askDepth[d];
+        const bidStr = bid ? `${c.long((bid.price * 100).toFixed(1).padStart(5) + "¢")} ${c.dim(bid.size.toFixed(0).padStart(7))}` : c.dim("—".padStart(14));
+        const askStr = ask ? `${c.short((ask.price * 100).toFixed(1).padStart(5) + "¢")} ${c.dim(ask.size.toFixed(0).padStart(7))}` : c.dim("—".padStart(14));
+        console.log(`     ${bidStr}  ${askStr}`);
+      }
+    }
+    console.log();
+  }
+}
+
+// ── Smart Keyword Matches ──
+
+export function printSmartKeywordMatches(matches: SmartKeywordMatch[]) {
+  if (matches.length === 0) {
+    console.log(c.dim("  no smart keyword matches found"));
+    return;
+  }
+
+  console.log(c.warn("  ┌─────────────────────────────────────────┐"));
+  console.log(c.warn("  │") + c.value("  SMART KEYWORD MATCHES                   ") + c.warn("│"));
+  console.log(c.warn("  └─────────────────────────────────────────┘"));
+
+  for (const m of matches) {
+    console.log(`  ${c.brand(m.keyword.padEnd(16))} ${c.value(m.newsTitle.slice(0, 60))}`);
+
+    for (const market of m.markets.slice(0, 3)) {
+      const yp = market.market.outcomePrices[0] ?? 0;
+      console.log(
+        `    ${c.brandDim("├─")} ${c.dim(market.market.question.slice(0, 48).padEnd(48))} ${priceTag(yp)} ` +
+        `${c.dim("rel")} ${c.value((market.relevanceScore * 100).toFixed(0) + "%")}`
+      );
+    }
+
+    for (const rec of m.recommendations.slice(0, 2)) {
+      const arrow = rec.side === "YES" ? c.long("▲ YES") : c.short("▼ NO");
+      console.log(
+        `    ${c.brandDim("└─")} ${arrow} @ ${c.amber(`$${rec.currentPrice.toFixed(2)}`)} ` +
+        `${c.dim("conf")} ${c.value((rec.confidence * 100).toFixed(0) + "%")} ` +
+        `${c.dim("ev")} ${rec.expectedValue >= 0 ? c.long(`+$${rec.expectedValue.toFixed(3)}`) : c.short(`-$${Math.abs(rec.expectedValue).toFixed(3)}`)}`
+      );
+    }
+    console.log();
+  }
+}
+
+// ── Portfolio Risk ──
+
+export function printPortfolioRisk(risk: PortfolioRisk) {
+  printSectionHeader("Portfolio Risk", "◆");
+  console.log();
+
+  const concColor = risk.concentrationScore > 0.5 ? c.short : risk.concentrationScore > 0.25 ? c.amber : c.long;
+  const divColor = risk.diversificationIndex >= 0.8 ? c.long : risk.diversificationIndex >= 0.5 ? c.amber : c.short;
+
+  const rows: [string, string][] = [
+    ["concentration", concColor(`${(risk.concentrationScore * 100).toFixed(1)}% (Herfindahl)`)],
+    ["diversification", divColor(`${(risk.diversificationIndex * 100).toFixed(1)}%`)],
+    ["max drawdown", c.short(`$${risk.maxDrawdownExposure.toFixed(2)}`)],
+  ];
+  for (const [k, v] of rows) {
+    console.log(`  ${c.label(k.padEnd(18))} ${v}`);
+  }
+  console.log();
+
+  // Correlated groups
+  if (risk.correlatedGroups.length > 0) {
+    console.log(`  ${c.brand("CORRELATED POSITIONS")}`);
+    for (const g of risk.correlatedGroups) {
+      console.log(`  ${c.warn("!")} ${c.value(g.reason)}`);
+      for (const p of g.positions) {
+        console.log(`    ${c.dim("├─")} ${c.dim(p)}`);
+      }
+    }
+    console.log();
+  }
+
+  // Hedge suggestions
+  if (risk.hedgeSuggestions.length > 0) {
+    console.log(`  ${c.brand("HEDGE SUGGESTIONS")}`);
+    for (const h of risk.hedgeSuggestions) {
+      console.log(`  ${c.blue("→")} ${c.value(h.description)}`);
+      console.log(`    ${c.dim(h.currentExposure)}`);
+    }
+    console.log();
+  }
+}
+
+// ── Compare ──
+
+export function printComparison(
+  market1: Market,
+  market2: Market,
+  orderbook1?: OrderBook,
+  orderbook2?: OrderBook
+) {
+  printSectionHeader("Market Comparison", "◈");
+  console.log();
+
+  const colW = 38;
+
+  // Headers
+  console.log(
+    `  ${c.brand("MARKET A".padEnd(colW))}  ${c.dim("│")}  ${c.brand("MARKET B")}`
+  );
+  console.log(c.dim("  " + "─".repeat(colW) + "──┼──" + "─".repeat(colW)));
+
+  // Questions
+  console.log(
+    `  ${c.value(market1.question.slice(0, colW).padEnd(colW))}  ${c.dim("│")}  ${c.value(market2.question.slice(0, colW))}`
+  );
+
+  // Prices
+  const y1 = market1.outcomePrices[0] ?? 0;
+  const n1 = market1.outcomePrices[1] ?? 1 - y1;
+  const y2 = market2.outcomePrices[0] ?? 0;
+  const n2 = market2.outcomePrices[1] ?? 1 - y2;
+  const price1Str = `YES ${pad(priceTag(y1), 5)} / NO ${pad(priceTag(n1), 5)}`;
+  const price2Str = `YES ${pad(priceTag(y2), 5)} / NO ${pad(priceTag(n2), 5)}`;
+  console.log(`  ${pad(price1Str, colW)}  ${c.dim("│")}  ${price2Str}`);
+
+  // Volume
+  console.log(
+    `  ${c.dim("vol")} ${pad(c.amber(fmtVol(market1.volume)), colW - 4)}  ${c.dim("│")}  ${c.dim("vol")} ${c.amber(fmtVol(market2.volume))}`
+  );
+
+  // Liquidity
+  console.log(
+    `  ${c.dim("liq")} ${pad(c.amber(fmtVol(market1.liquidity)), colW - 4)}  ${c.dim("│")}  ${c.dim("liq")} ${c.amber(fmtVol(market2.liquidity))}`
+  );
+
+  // Category
+  console.log(
+    `  ${c.dim("cat")} ${pad(c.label(market1.category || "—"), colW - 4)}  ${c.dim("│")}  ${c.dim("cat")} ${c.label(market2.category || "—")}`
+  );
+
+  // End date
+  console.log(
+    `  ${c.dim("end")} ${pad(c.label(fmtDate(market1.endDate)), colW - 4)}  ${c.dim("│")}  ${c.dim("end")} ${c.label(fmtDate(market2.endDate))}`
+  );
+
+  // Orderbook comparison
+  if (orderbook1 || orderbook2) {
+    console.log(c.dim("  " + "─".repeat(colW) + "──┼──" + "─".repeat(colW)));
+    const ob1 = orderbook1 ?? { spread: 0, midpoint: 0, bids: [], asks: [] };
+    const ob2 = orderbook2 ?? { spread: 0, midpoint: 0, bids: [], asks: [] };
+    console.log(
+      `  ${c.dim("spread")} ${pad(c.amber((ob1.spread * 100).toFixed(1) + "¢"), colW - 7)}  ${c.dim("│")}  ${c.dim("spread")} ${c.amber((ob2.spread * 100).toFixed(1) + "¢")}`
+    );
+    console.log(
+      `  ${c.dim("mid")} ${pad(priceTag(ob1.midpoint), colW - 4)}  ${c.dim("│")}  ${c.dim("mid")} ${priceTag(ob2.midpoint)}`
+    );
+  }
+
+  console.log();
+}
+
+// ── Social Signals ──
+
+export function printSocialSignals(signal: SocialSignal) {
+  printSectionHeader(`Social Signals: "${signal.query}"`, "◉");
+  console.log();
+
+  console.log(`  ${c.dim("source")}   ${c.value(signal.source)}  ${c.dim("mentions")} ${c.value(String(signal.mentionCount))}`);
+  console.log(`  ${c.dim("fetched")}  ${c.dim(new Date(signal.fetchedAt).toLocaleTimeString())}`);
+  console.log();
+
+  // Sentiment bar
+  const total = signal.sentiment.pos + signal.sentiment.neg + signal.sentiment.neutral;
+  if (total > 0) {
+    const posW = Math.round((signal.sentiment.pos / total) * 30);
+    const negW = Math.round((signal.sentiment.neg / total) * 30);
+    const neutW = 30 - posW - negW;
+    const bar = c.long("█".repeat(posW)) + c.dim("█".repeat(neutW)) + c.short("█".repeat(negW));
+    console.log(`  ${c.dim("sentiment")} ${bar}`);
+    console.log(
+      `  ${c.long("+" + signal.sentiment.pos)}  ` +
+      `${c.dim("~" + signal.sentiment.neutral)}  ` +
+      `${c.short("-" + signal.sentiment.neg)}`
+    );
+    console.log();
+  }
+
+  // Top posts
+  if (signal.topPosts.length > 0) {
+    console.log(`  ${c.brand("TOP POSTS")}`);
+    for (const post of signal.topPosts.slice(0, 8)) {
+      const score = post.score >= 100 ? c.long(String(post.score).padStart(5)) : c.dim(String(post.score).padStart(5));
+      console.log(
+        `  ${score} ${c.purple(("r/" + post.subreddit).padEnd(18).slice(0, 18))} ${c.value(post.title.slice(0, 50))}`
+      );
+    }
+    console.log();
+  }
+}
+
+// ── Event Tree ──
+
+export function printEventTree(trees: EventTree[]) {
+  printSectionHeader("Event Tree", "◉");
+  console.log();
+
+  if (trees.length === 0) {
+    console.log(c.dim("  no multi-market events found"));
+    console.log();
+    return;
+  }
+
+  for (const tree of trees) {
+    const sumPct = (tree.totalYesProb * 100).toFixed(1);
+    const anomalyLabel = tree.anomaly
+      ? tree.totalYesProb > 1.05
+        ? c.short(` [OVER Σ=${sumPct}%]`)
+        : c.long(` [UNDER Σ=${sumPct}%]`)
+      : c.dim(` [Σ=${sumPct}%]`);
+
+    console.log(`  ${c.brand(B.dtl + B.dh)} ${c.value(`"${tree.eventTitle.slice(0, 50)}"`)}${anomalyLabel}`);
+
+    for (let i = 0; i < tree.markets.length; i++) {
+      const m = tree.markets[i];
+      const isLast = i === tree.markets.length - 1;
+      const connector = isLast ? B.dbl : B.dvr;
+      const pricePct = (m.yesPrice * 100).toFixed(0);
+      const barLen = Math.round(m.yesPrice * 15);
+      const bar = c.brand("█".repeat(barLen)) + c.muted("░".repeat(15 - barLen));
+
+      console.log(
+        `  ${c.brand(connector + B.h)} ${c.value(m.market.question.slice(0, 30).padEnd(30))} ` +
+        `${priceTag(m.yesPrice)}  ${bar}  ${c.amber(fmtVol(m.volume))}`
+      );
+    }
+    console.log();
+  }
+}
+
+// ── Digest ──
+
+export function printDigest(digest: DigestData) {
+  printSectionHeader("Daily Digest", "★");
+  console.log();
+  console.log(`  ${c.dim("generated")} ${c.value(new Date(digest.generatedAt).toLocaleString())}`);
+  console.log();
+
+  // Watchlist changes
+  if (digest.watchlistChanges.length > 0) {
+    console.log(`  ${c.brand("WATCHLIST CHANGES")}`);
+    for (const w of digest.watchlistChanges) {
+      const sign = w.delta >= 0 ? "+" : "";
+      const color = w.delta >= 0 ? c.long : c.short;
+      console.log(
+        `  ${c.dim("├─")} ${c.value(w.question.slice(0, 45))} ` +
+        `${priceTag(w.oldPrice)} ${c.dim("→")} ${priceTag(w.newPrice)} ` +
+        `${color(`${sign}${(w.delta * 100).toFixed(0)}¢`)}`
+      );
+    }
+    console.log();
+  }
+
+  // Triggered alerts
+  if (digest.triggeredAlerts.length > 0) {
+    console.log(c.warn("  ┌─────────────────────────────────────────┐"));
+    console.log(c.warn("  │") + c.value("  TRIGGERED ALERTS                        ") + c.warn("│"));
+    console.log(c.warn("  └─────────────────────────────────────────┘"));
+    for (const a of digest.triggeredAlerts) {
+      console.log(
+        `  ${c.long("●")} ${c.value(a.question.slice(0, 45))} ${a.side} now ${priceTag(a.currentPrice)}`
+      );
+    }
+    console.log();
+  }
+
+  // Recommendations
+  if (digest.newRecommendations.length > 0) {
+    console.log(`  ${c.brand("TOP RECOMMENDATIONS")}`);
+    for (const r of digest.newRecommendations) {
+      const arrow = r.side === "YES" ? c.long("▲ YES") : c.short("▼ NO");
+      const evStr = r.expectedValue >= 0
+        ? c.long(`+$${r.expectedValue.toFixed(3)}`)
+        : c.short(`-$${Math.abs(r.expectedValue).toFixed(3)}`);
+      console.log(
+        `  ${c.dim("├─")} ${arrow} ${c.value(r.market.question.slice(0, 40))} ` +
+        `@ ${c.amber(`${(r.currentPrice * 100).toFixed(0)}¢`)} ` +
+        `${c.dim("ev")} ${evStr}`
+      );
+    }
+    console.log();
+  }
+
+  // Resolved bets
+  if (digest.resolvedBets.length > 0) {
+    console.log(`  ${c.brand("RECENTLY RESOLVED")}`);
+    for (const r of digest.resolvedBets) {
+      const icon = r.resolution === "correct" ? c.long("✓") : c.short("✗");
+      const pnlColor = r.pnl >= 0 ? c.long : c.short;
+      const pnlStr = r.pnl >= 0 ? `+$${r.pnl.toFixed(2)}` : `-$${Math.abs(r.pnl).toFixed(2)}`;
+      console.log(`  ${icon} ${c.value(r.question.slice(0, 45))} ${pnlColor(pnlStr)}`);
+    }
+    console.log();
+  }
+
+  // Upcoming resolutions
+  if (digest.upcomingResolutions.length > 0) {
+    console.log(`  ${c.brand("UPCOMING RESOLUTIONS (7d)")}`);
+    for (const u of digest.upcomingResolutions) {
+      console.log(
+        `  ${c.dim("├─")} ${c.value(u.question.slice(0, 45))} ${priceTag(u.yesPrice)} ${c.dim(`${u.daysUntil}d`)}`
+      );
+    }
+    console.log();
+  }
+
+  // Portfolio summary
+  if (digest.portfolioSummary) {
+    const p = digest.portfolioSummary;
+    const pnlColor = p.totalPnL >= 0 ? c.long : c.short;
+    const pnlSign = p.totalPnL >= 0 ? "+" : "";
+    console.log(`  ${c.brand("PORTFOLIO")}`);
+    console.log(`  ${c.dim("cash")} ${c.amber("$" + p.balance.toFixed(2))}  ${c.dim("positions")} ${c.amber("$" + p.positionsValue.toFixed(2))}  ${c.dim("total")} ${c.value("$" + p.totalValue.toFixed(2))}  ${pnlColor(pnlSign + "$" + p.totalPnL.toFixed(2))}`);
+    console.log();
+  }
 }
 
 // ── Utility ──

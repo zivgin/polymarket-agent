@@ -97,6 +97,134 @@ export interface CategorySummary {
   topMarkets: Market[];
 }
 
+// ── Momentum ──
+
+export interface PriceSnapshot {
+  marketId: string;
+  price: number;
+  timestamp: number;
+}
+
+export interface MomentumResult {
+  marketId: string;
+  question: string;
+  currentPrice: number;
+  deltas: { "1h": number | null; "6h": number | null; "24h": number | null; "7d": number | null };
+  trend: "up" | "down" | "flat";
+  sparkline: string;
+  snapshots: PriceSnapshot[];
+}
+
+// ── Backtest ──
+
+export interface CalibrationBucket {
+  range: string;
+  predicted: number;
+  actual: number;
+  count: number;
+}
+
+export interface BacktestResult {
+  totalRecs: number;
+  resolved: number;
+  correct: number;
+  incorrect: number;
+  hitRate: number;
+  totalROI: number;
+  brierScore: number;
+  calibration: CalibrationBucket[];
+  details: BacktestDetail[];
+}
+
+export interface BacktestDetail {
+  marketQuestion: string;
+  side: "YES" | "NO";
+  priceAtRec: number;
+  confidence: number;
+  resolution: "correct" | "incorrect";
+  pnl: number;
+}
+
+// ── Calendar ──
+
+export interface CalendarMarket {
+  market: Market;
+  yesPrice: number;
+  daysUntil: number;
+}
+
+export interface CalendarBucket {
+  label: string;
+  markets: CalendarMarket[];
+}
+
+// ── Liquidity ──
+
+export interface DepthLevel {
+  price: number;
+  size: number;
+  cumulative: number;
+}
+
+export interface LiquidityProfile {
+  market: Market;
+  spread: number;
+  midpoint: number;
+  bidDepth: DepthLevel[];
+  askDepth: DepthLevel[];
+  totalBidLiquidity: number;
+  totalAskLiquidity: number;
+  liquidityScore: number;
+}
+
+// ── Social ──
+
+export interface SocialPost {
+  title: string;
+  score: number;
+  comments: number;
+  subreddit: string;
+  url: string;
+  created: number;
+}
+
+export interface SocialSignal {
+  source: string;
+  query: string;
+  mentionCount: number;
+  sentiment: { pos: number; neg: number; neutral: number };
+  topPosts: SocialPost[];
+  fetchedAt: string;
+}
+
+// ── Event Graph ──
+
+export interface EventTreeMarket {
+  market: Market;
+  yesPrice: number;
+  volume: number;
+}
+
+export interface EventTree {
+  eventId: string;
+  eventTitle: string;
+  totalYesProb: number;
+  anomaly: boolean;
+  markets: EventTreeMarket[];
+}
+
+// ── Digest ──
+
+export interface DigestData {
+  generatedAt: string;
+  watchlistChanges: Array<{ question: string; oldPrice: number; newPrice: number; delta: number }>;
+  triggeredAlerts: Array<{ question: string; side: string; threshold: number; currentPrice: number }>;
+  newRecommendations: BetRecommendation[];
+  resolvedBets: Array<{ question: string; side: string; resolution: string; pnl: number }>;
+  upcomingResolutions: Array<{ question: string; yesPrice: number; daysUntil: number }>;
+  portfolioSummary: { balance: number; positionsValue: number; totalValue: number; totalPnL: number } | null;
+}
+
 // ── Config ──
 
 export interface AgentConfig {

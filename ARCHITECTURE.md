@@ -4,26 +4,24 @@
 
 ```
 ┌────────────────────────────────────────────────────────────────────────┐
-│                            CLI Layer (934 LOC)                         │
-│  cli.ts — 18 commands via Commander.js, orchestrates all modules       │
+│                            CLI Layer (~1,200 LOC)                      │
+│  cli.ts — 28 commands via Commander.js, orchestrates all modules       │
 ├────────────────────────────────────────────────────────────────────────┤
-│                       Presentation Layer (853 LOC)                     │
-│  ui.ts — 31 exported functions: tables, bars, cards, dashboards        │
+│                       Presentation Layer (~1,300 LOC)                  │
+│  ui.ts — 41 exported functions: tables, bars, cards, dashboards        │
 │  export.ts — JSON/CSV serialization for markets, recs, watchlist       │
 ├───────────────────┬───────────────────┬────────────────────────────────┤
-│  Strategy (525)   │  State (696)      │  Data Sources (344)            │
+│  Strategy (~1,300)│  State (696)      │  Data Sources (~450)           │
 │                   │                   │                                │
 │  recommender.ts   │  watchlist.ts     │  news/index.ts (aggregator)    │
-│    220 LOC        │    65 LOC         │    58 LOC                      │
 │  arbitrage.ts     │  alerts.ts        │  news/rss.ts                   │
-│    107 LOC        │    118 LOC        │    89 LOC                      │
 │  correlation.ts   │  history.ts       │  news/telegram.ts              │
-│    97 LOC         │    144 LOC        │    107 LOC                     │
-│  odds.ts          │  portfolio.ts     │  news/scraper.ts               │
-│    101 LOC        │    232 LOC        │    87 LOC                      │
-│                   │  keywords.ts      │                                │
-│                   │    87 LOC         │  matcher/index.ts              │
-│                   │                   │    192 LOC                     │
+│  momentum.ts      │  portfolio.ts     │  news/scraper.ts               │
+│  backtest.ts      │  keywords.ts      │  news/social.ts (Reddit)       │
+│  liquidity.ts     │                   │                                │
+│  portfolio-risk.ts│  calendar.ts      │  matcher/index.ts              │
+│  event-graph.ts   │  digest.ts        │                                │
+│  odds.ts          │                   │                                │
 ├───────────────────┴───────────────────┤                                │
 │           API Client (287 LOC)        │                                │
 │  clients/polymarket.ts                │                                │
@@ -33,27 +31,30 @@
 │                                                                        │
 │  Gamma API ──── gamma-api.polymarket.com ──── markets, events, tags    │
 │  CLOB API ───── clob.polymarket.com ───────── orderbook, prices        │
+│  Reddit ─────── old.reddit.com/search.json ── social signals           │
 │  RSS ────────── 15 feeds (NYT, BBC, Bloomberg, CoinDesk, ESPN...)      │
 │  Telegram ───── 3 channels (polyaborygen, WhaleTrades, cryptonews)     │
 │  Firecrawl ──── firecrawl.dev ─────────────── article scraping         │
 └────────────────────────────────────────────────────────────────────────┘
 ```
 
-**Total:** ~3,200 lines of TypeScript across 18 source files.
+**Total:** ~5,400 lines of TypeScript across 26 source files.
 
 ## Directory Structure
 
 ```
 polymarket-agent/
 ├── src/
-│   ├── cli.ts                    # Entry point — 18 command groups
+│   ├── cli.ts                    # Entry point — 28 command groups
 │   ├── config.ts                 # Environment variable loading + defaults
-│   ├── ui.ts                     # Terminal rendering (31 print functions)
+│   ├── ui.ts                     # Terminal rendering (41 print functions)
 │   ├── export.ts                 # JSON/CSV file serialization
+│   ├── calendar.ts               # Resolution calendar (group by time bucket)
+│   ├── digest.ts                 # Daily digest generator + markdown export
 │   │
 │   ├── watchlist.ts              # Market watchlist CRUD
 │   ├── alerts.ts                 # Price alert thresholds + polling check
-│   ├── keyword-alerts.ts         # News keyword watches + matching
+│   ├── keyword-alerts.ts         # News keyword watches + smart matching
 │   ├── history.ts                # Recommendation log + resolution tracking
 │   ├── portfolio.ts              # Paper trading: positions, trades, P&L
 │   │
@@ -64,7 +65,8 @@ polymarket-agent/
 │   │   ├── index.ts              # NewsAggregator: dedup + merge sources
 │   │   ├── rss.ts                # RSS parser (rss-parser library)
 │   │   ├── telegram.ts           # Telegram channel integration
-│   │   └── scraper.ts            # Firecrawl web scraper
+│   │   ├── scraper.ts            # Firecrawl web scraper
+│   │   └── social.ts             # Reddit social signal scanner
 │   │
 │   ├── matcher/
 │   │   └── index.ts              # News-to-market matching engine
@@ -72,13 +74,18 @@ polymarket-agent/
 │   ├── strategy/
 │   │   ├── recommender.ts        # Sentiment → edge → Kelly → confidence
 │   │   ├── arbitrage.ts          # YES+NO < $1 scanner
-│   │   └── correlation.ts        # Multi-market probability analysis
+│   │   ├── correlation.ts        # Multi-market probability analysis
+│   │   ├── momentum.ts           # Price snapshot tracking + sparklines
+│   │   ├── backtest.ts           # Historical accuracy + calibration
+│   │   ├── liquidity.ts          # Orderbook depth + spread analysis
+│   │   ├── portfolio-risk.ts     # Concentration + correlation + hedging
+│   │   └── event-graph.ts        # Event probability tree + anomaly detection
 │   │
 │   ├── utils/
 │   │   └── odds.ts               # Odds format conversion + edge math
 │   │
 │   └── types/
-│       └── index.ts              # All TypeScript interfaces (126 LOC)
+│       └── index.ts              # All TypeScript interfaces (~230 LOC)
 │
 ├── dist/                         # Compiled output (gitignored)
 ├── .env.example                  # Environment template
@@ -252,6 +259,79 @@ Groups markets by event (via Gamma `/events` endpoint):
 - Flags **anomalies** where deviation > 5%: "over-priced" (Σ > 1.05) or "under-priced" (Σ < 0.95)
 - Sorts anomalies first
 
+### Momentum Tracker (`strategy/momentum.ts`)
+
+Records price snapshots over time and computes deltas:
+
+- **Data collection** — `recordPrices()` called automatically during `scan` and `watch list` commands
+- **Delta computation** — Finds closest historical price to 1h/6h/24h/7d ago, computes change
+- **Sparkline** — Maps last 20 prices to `▁▂▃▄▅▆▇█` characters
+- **Trend detection** — UP (>+1¢), DOWN (<-1¢), or FLAT based on most recent delta
+- **Pruning** — `pruneOldSnapshots(maxAgeDays)` removes stale data
+
+### Backtest Engine (`strategy/backtest.ts`)
+
+Evaluates historical recommendation accuracy:
+
+- **Hit rate** — correct / (correct + incorrect)
+- **Brier score** — `(1/N) × Σ(confidence - outcome)²` (lower = better calibrated)
+- **Calibration** — Bins entries by confidence, compares predicted vs actual win rate
+- **ROI** — `Σ(pnl) / Σ(suggestedSize)` across all resolved entries
+- **PnL per entry** — correct: `(1/priceAtRec - 1) × suggestedSize`, incorrect: `-suggestedSize`
+
+### Liquidity Analyzer (`strategy/liquidity.ts`)
+
+Evaluates market depth quality via CLOB orderbook:
+
+- **Spread tightness** (40% weight) — `max(0, 1 - spread × 20)` (5¢ spread = 0)
+- **Bid depth** (30% weight) — cumulative bid liquidity vs $5K benchmark
+- **Ask depth** (30% weight) — cumulative ask liquidity vs $5K benchmark
+- Returns `LiquidityProfile` with full depth ladder for each market
+
+### Portfolio Risk (`strategy/portfolio-risk.ts`)
+
+Concentration and correlation analysis:
+
+- **Herfindahl index** — Σ(weight²), 1.0 = single position, 1/n = perfectly diversified
+- **Diversification index** — `1 / (n × HHI)`
+- **Correlation detection** — Groups positions by keyword overlap (≥2 shared words)
+- **Directional risk** — Flags if all positions are same side (all YES or all NO)
+- **Hedge suggestions** — Alerts on >50% concentration, suggests opposing positions
+
+### Event Graph (`strategy/event-graph.ts`)
+
+Groups markets by event and checks probability consistency:
+
+- Fetches events from Gamma API, extracts child markets
+- Sums YES probabilities — exclusive outcomes should sum to ~1.0
+- Flags anomalies where deviation exceeds ±5%
+- ASCII tree rendering with bar charts and volume
+
+### Social Signals (`news/social.ts`)
+
+Reddit mention scanner:
+
+- Queries `old.reddit.com/search.json` with proper User-Agent
+- Reuses positive/negative word lists from recommender for sentiment classification
+- Returns mention count, sentiment breakdown (pos/neg/neutral), and top posts by score
+
+### Resolution Calendar (`calendar.ts`)
+
+Groups active markets by resolution date into buckets: Today, Tomorrow, This Week, Next Week, This Month, Later.
+
+### Daily Digest (`digest.ts`)
+
+Aggregates all subsystems into a single report:
+
+1. Watchlist price changes (>1¢ delta)
+2. Triggered alerts (polled live)
+3. Top 5 new recommendations (mini-scan of 10 news items)
+4. Recently resolved bets (last 24h from history)
+5. Upcoming resolutions (7-day window)
+6. Portfolio summary
+
+Supports markdown export via `digestToMarkdown()`.
+
 ### Odds Calculator (`utils/odds.ts`, 101 LOC)
 
 Bidirectional conversion between four formats:
@@ -270,9 +350,10 @@ Each state module owns a single JSON file in the project root:
 |--------|------|--------|----------------|
 | `watchlist.ts` | `.watchlist.json` | `{ entries: WatchlistEntry[] }` | add, remove, get, clear |
 | `alerts.ts` | `.alerts.json` | `{ alerts: PriceAlert[] }` | add, remove, list, check (poll) |
-| `keyword-alerts.ts` | `.keywords.json` | `{ keywords: KeywordWatch[] }` | add, remove, list, match |
+| `keyword-alerts.ts` | `.keywords.json` | `{ keywords: KeywordWatch[] }` | add, remove, list, match, smartMatch |
 | `history.ts` | `.history.json` | `{ entries: HistoryEntry[] }` | log, get, updateResolutions, stats |
 | `portfolio.ts` | `.portfolio.json` | `{ balance, positions[], trades[], createdAt }` | buy, sell, reset, value |
+| `strategy/momentum.ts` | `.momentum.json` | `{ snapshots: Record<string, PriceSnapshot[]> }` | record, get, prune |
 
 All files use synchronous `fs.readFileSync`/`fs.writeFileSync`. Each module has private `load()`/`save()` helpers. No shared database or cross-module state dependencies.
 
@@ -299,7 +380,7 @@ Virtual balance starts at $1,000. Positions track:
 
 Sells calculate realized P&L. The `getPortfolioValue()` function enriches positions with live prices and unrealized P&L.
 
-## Presentation Layer (`ui.ts`, 781 LOC)
+## Presentation Layer (`ui.ts`, ~1,300 LOC)
 
 ### Color Palette
 
@@ -340,6 +421,16 @@ Accent:  #A78BFA (soft violet)       #60A5FA (cool blue)
 | `printWatchlist()` | watch list | Entries with price deltas |
 | `printConfigStatus()` | status | Service readiness indicators |
 | `printLiveHeader/Tick/Alert()` | live | Live monitoring UI |
+| `printMomentum()` | momentum | Sparkline, deltas, trend indicator |
+| `printBacktest()` | backtest | Hit rate, ROI, Brier, calibration chart |
+| `printCalendar()` | calendar | Resolution date buckets |
+| `printLiquidity()` | liquidity | Depth ladder, spread, liquidity score |
+| `printSmartKeywordMatches()` | kw scan --smart | Keywords → markets → recommendations |
+| `printPortfolioRisk()` | portfolio risk | HHI, correlations, hedge suggestions |
+| `printComparison()` | compare | Two-column side-by-side market view |
+| `printSocialSignals()` | signals | Sentiment bar, top Reddit posts |
+| `printEventTree()` | event-tree | ASCII tree with probability bars |
+| `printDigest()` | digest | Combined daily report |
 
 ### Utility Functions
 

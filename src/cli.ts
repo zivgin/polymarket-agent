@@ -37,6 +37,16 @@ import {
   printCorrelation,
   printPortfolio,
   printTradeHistory,
+  printMomentum,
+  printBacktest,
+  printCalendar,
+  printLiquidity,
+  printSmartKeywordMatches,
+  printPortfolioRisk,
+  printComparison,
+  printSocialSignals,
+  printEventTree,
+  printDigest,
 } from "./ui.js";
 import { addToWatchlist, removeFromWatchlist, getWatchlist, clearWatchlist } from "./watchlist.js";
 import { isTelegramConfigured } from "./news/index.js";
@@ -45,10 +55,19 @@ import { exportMarkets, exportRecommendations, exportWatchlist } from "./export.
 import { ArbitrageScanner } from "./strategy/arbitrage.js";
 import { CorrelationAnalyzer } from "./strategy/correlation.js";
 import { addAlert, removeAlert, getAlerts, checkAlerts } from "./alerts.js";
-import { addKeyword, removeKeyword, getKeywords, matchKeywordsToNews } from "./keyword-alerts.js";
+import { addKeyword, removeKeyword, getKeywords, matchKeywordsToNews, smartMatchKeywordsToNews } from "./keyword-alerts.js";
 import { getHistory, logRecommendations, updateResolutions, getAccuracyStats } from "./history.js";
 import { getPortfolioValue, buyPosition, sellPosition, resetPortfolio, getTradeHistory } from "./portfolio.js";
+import { recordPrices, getMomentum } from "./strategy/momentum.js";
+import { runBacktest } from "./strategy/backtest.js";
+import { getResolutionCalendar } from "./calendar.js";
+import { analyzeLiquidity } from "./strategy/liquidity.js";
+import { analyzePortfolioRisk } from "./strategy/portfolio-risk.js";
+import { fetchRedditSignals } from "./news/social.js";
+import { buildEventTree } from "./strategy/event-graph.js";
+import { generateDigest, digestToMarkdown } from "./digest.js";
 import type { BetRecommendation, Market, MarketMatch, NewsItem } from "./types/index.js";
+import fs from "fs";
 
 const config = loadConfig();
 const polymarket = new PolymarketClient(config.polymarket.apiKey);
@@ -120,6 +139,12 @@ program
     if (opts.export) {
       exportRecommendations(allRecs, opts.export);
       printStatus(`exported to ${opts.export}`, "ok");
+    }
+
+    // Record prices for momentum tracking
+    const scannedMarkets = allMatches.flatMap((m) => m.matches.map((mm) => mm.market));
+    if (scannedMarkets.length > 0) {
+      recordPrices(scannedMarkets);
     }
 
     printTimestamp();
@@ -395,6 +420,15 @@ watchCmd
         // skip price fetch errors
       }
       enriched.push({ ...entry, currentPrice });
+    }
+
+    // Record prices for momentum tracking
+    const watchMarkets = enriched.filter((e) => e.currentPrice).map((e) => ({
+      id: e.id,
+      outcomePrices: [e.currentPrice!.yes, e.currentPrice!.no],
+    }));
+    if (watchMarkets.length > 0) {
+      recordPrices(watchMarkets as any);
     }
 
     printWatchlist(enriched);
@@ -779,29 +813,40 @@ kwCmd
 kwCmd
   .command("scan")
   .description("Scan current news for keyword matches")
-  .action(async () => {
+  .option("--smart", "Include market matching and recommendations")
+  .action(async (opts) => {
     printHeader();
 
     printStatus("fetching news...");
     const news = await newsAgg.fetchAll();
-    const matches = matchKeywordsToNews(news);
 
-    if (matches.length > 0) {
-      printKeywordMatches(matches);
-      // Auto-search for matching markets
-      printStatus("searching for related markets...");
-      for (const m of matches.slice(0, 5)) {
-        const markets = await polymarket.searchMarkets(m.keyword, 3);
-        if (markets.length > 0) {
-          printStatus(`"${m.keyword}" → ${markets.length} markets`, "ok");
-          for (const market of markets.slice(0, 2)) {
-            const yp = market.outcomePrices[0] ?? 0;
-            console.log(chalk.hex("#006B7A")(`    └─ `) + chalk.hex("#E5E7EB")(market.question.slice(0, 50)));
-          }
-        }
+    if (opts.smart) {
+      printStatus("running smart keyword matching...");
+      const smartMatches = await smartMatchKeywordsToNews(news as any, matcher, recommender);
+      if (smartMatches.length > 0) {
+        printSmartKeywordMatches(smartMatches);
+      } else {
+        printStatus("no keyword matches in current news", "info");
       }
     } else {
-      printStatus("no keyword matches in current news", "info");
+      const matches = matchKeywordsToNews(news);
+      if (matches.length > 0) {
+        printKeywordMatches(matches);
+        // Auto-search for matching markets
+        printStatus("searching for related markets...");
+        for (const m of matches.slice(0, 5)) {
+          const markets = await polymarket.searchMarkets(m.keyword, 3);
+          if (markets.length > 0) {
+            printStatus(`"${m.keyword}" → ${markets.length} markets`, "ok");
+            for (const market of markets.slice(0, 2)) {
+              const yp = market.outcomePrices[0] ?? 0;
+              console.log(chalk.hex("#006B7A")(`    └─ `) + chalk.hex("#E5E7EB")(market.question.slice(0, 50)));
+            }
+          }
+        }
+      } else {
+        printStatus("no keyword matches in current news", "info");
+      }
     }
 
     printTimestamp();
@@ -928,6 +973,233 @@ portfolioCmd
     printHeader();
     const trades = getTradeHistory(Number(opts.limit));
     printTradeHistory(trades);
+    printTimestamp();
+  });
+
+// ── momentum ──
+program
+  .command("momentum")
+  .description("Show price momentum and sparkline for a market")
+  .argument("<query>", "Market search query")
+  .action(async (query) => {
+    printHeader();
+
+    printStatus(`searching: "${query}"...`);
+    const markets = await polymarket.searchMarkets(query, 5);
+    if (markets.length === 0) {
+      printStatus("no markets found", "warn");
+      return;
+    }
+
+    const market = markets[0];
+    // Record current price
+    recordPrices([market]);
+
+    const result = getMomentum(market.id, market.question);
+    if (!result) {
+      printStatus("no price history yet — run scan or watch list to record prices", "info");
+      printStatus(`recorded current price: ${(market.outcomePrices[0] * 100).toFixed(0)}¢`, "ok");
+      printTimestamp();
+      return;
+    }
+
+    printMomentum(result);
+    printTimestamp();
+  });
+
+// ── backtest ──
+program
+  .command("backtest")
+  .description("Backtest recommendation accuracy and calibration")
+  .option("--detailed", "Show individual trade details")
+  .option("--update", "Update resolutions before backtesting")
+  .action(async (opts) => {
+    printHeader();
+
+    if (opts.update) {
+      printStatus("updating resolutions...");
+      const result = await updateResolutions(polymarket);
+      printStatus(`updated ${result.updated} entries (${result.correct}W / ${result.incorrect}L / ${result.pending}P)`, "ok");
+    }
+
+    printStatus("running backtest...");
+    const result = runBacktest();
+
+    if (result.totalRecs === 0) {
+      printStatus("no recommendations in history — run scan first", "info");
+      printTimestamp();
+      return;
+    }
+
+    printBacktest(result, opts.detailed);
+    printTimestamp();
+  });
+
+// ── calendar ──
+program
+  .command("calendar")
+  .description("Show upcoming market resolution dates")
+  .option("-d, --days <n>", "Max days ahead", "90")
+  .option("--watch", "Only show watchlist markets")
+  .action(async (opts) => {
+    printHeader();
+
+    printStatus("loading resolution calendar...");
+    const buckets = await getResolutionCalendar(polymarket, {
+      days: Number(opts.days),
+      watchlistOnly: opts.watch,
+    });
+
+    printStatus(`${buckets.reduce((s, b) => s + b.markets.length, 0)} markets with resolution dates`, "ok");
+    printCalendar(buckets);
+    printTimestamp();
+  });
+
+// ── liquidity ──
+program
+  .command("liquidity")
+  .description("Analyze market liquidity and orderbook depth")
+  .argument("[query]", "Market search query (defaults to watchlist)")
+  .option("-l, --limit <n>", "Max markets to analyze", "10")
+  .action(async (query, opts) => {
+    printHeader();
+
+    let markets: Market[];
+    if (query) {
+      printStatus(`searching: "${query}"...`);
+      markets = await polymarket.searchMarkets(query, Number(opts.limit));
+    } else {
+      printStatus("analyzing watchlist liquidity...");
+      const entries = getWatchlist();
+      const fetched: Market[] = [];
+      for (const entry of entries) {
+        try {
+          const results = await polymarket.searchMarkets(entry.question.slice(0, 30), 5);
+          const match = results.find((m) => m.id === entry.id || m.slug === entry.slug);
+          if (match) fetched.push(match);
+        } catch {
+          // skip
+        }
+      }
+      markets = fetched;
+    }
+
+    if (markets.length === 0) {
+      printStatus("no markets found", "warn");
+      return;
+    }
+
+    printStatus(`analyzing ${markets.length} markets...`);
+    const profiles = await analyzeLiquidity(polymarket, markets.slice(0, Number(opts.limit)));
+    printStatus(`${profiles.length} markets analyzed`, "ok");
+    printLiquidity(profiles);
+    printTimestamp();
+  });
+
+// ── portfolio risk ──
+portfolioCmd
+  .command("risk")
+  .description("Analyze portfolio risk, concentration, and correlations")
+  .action(async () => {
+    printHeader();
+
+    printStatus("analyzing portfolio risk...");
+    const risk = await analyzePortfolioRisk(polymarket);
+    printPortfolioRisk(risk);
+    printTimestamp();
+  });
+
+// ── compare ──
+program
+  .command("compare")
+  .description("Compare two markets side-by-side")
+  .argument("<query1>", "First market search query")
+  .argument("<query2>", "Second market search query")
+  .action(async (query1, query2) => {
+    printHeader();
+
+    printStatus(`searching: "${query1}"...`);
+    const markets1 = await polymarket.searchMarkets(query1, 1);
+    printStatus(`searching: "${query2}"...`);
+    const markets2 = await polymarket.searchMarkets(query2, 1);
+
+    if (markets1.length === 0) {
+      printStatus(`no markets found for "${query1}"`, "warn");
+      return;
+    }
+    if (markets2.length === 0) {
+      printStatus(`no markets found for "${query2}"`, "warn");
+      return;
+    }
+
+    const m1 = markets1[0];
+    const m2 = markets2[0];
+
+    // Fetch orderbooks
+    let ob1, ob2;
+    const yesToken1 = m1.tokens.find((t) => t.outcome === "Yes" || t.outcome === "YES");
+    const yesToken2 = m2.tokens.find((t) => t.outcome === "Yes" || t.outcome === "YES");
+    if (yesToken1?.token_id) {
+      try { ob1 = await polymarket.getOrderBook(yesToken1.token_id); } catch {}
+    }
+    if (yesToken2?.token_id) {
+      try { ob2 = await polymarket.getOrderBook(yesToken2.token_id); } catch {}
+    }
+
+    printComparison(m1, m2, ob1, ob2);
+    printTimestamp();
+  });
+
+// ── signals (social) ──
+program
+  .command("signals")
+  .description("Scan Reddit for social signals on a topic")
+  .argument("<query>", "Search query")
+  .option("-l, --limit <n>", "Max posts to fetch", "25")
+  .action(async (query, opts) => {
+    printHeader();
+
+    printStatus(`scanning Reddit for "${query}"...`);
+    const signal = await fetchRedditSignals(query, Number(opts.limit));
+    printStatus(`${signal.mentionCount} mentions found`, signal.mentionCount > 0 ? "ok" : "info");
+    printSocialSignals(signal);
+    printTimestamp();
+  });
+
+// ── event-tree ──
+program
+  .command("event-tree")
+  .description("Show event probability tree with anomaly detection")
+  .argument("[query]", "Filter by event/market keyword")
+  .option("-l, --limit <n>", "Max events to show", "10")
+  .action(async (query, opts) => {
+    printHeader();
+
+    printStatus("building event tree...");
+    const trees = await buildEventTree(polymarket, query, Number(opts.limit));
+    printStatus(`${trees.length} multi-market events found`, trees.length > 0 ? "ok" : "info");
+    printEventTree(trees);
+    printTimestamp();
+  });
+
+// ── digest ──
+program
+  .command("digest")
+  .description("Generate a daily digest report")
+  .option("--export <file>", "Export digest to markdown file")
+  .action(async (opts) => {
+    printHeader();
+
+    printStatus("generating daily digest...");
+    const digest = await generateDigest(polymarket, newsAgg, matcher, recommender);
+    printDigest(digest);
+
+    if (opts.export) {
+      const md = digestToMarkdown(digest);
+      fs.writeFileSync(opts.export, md);
+      printStatus(`exported to ${opts.export}`, "ok");
+    }
+
     printTimestamp();
   });
 

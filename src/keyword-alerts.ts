@@ -3,6 +3,9 @@
 
 import fs from "fs";
 import path from "path";
+import type { MarketMatch, BetRecommendation } from "./types/index.js";
+import type { MarketMatcher } from "./matcher/index.js";
+import type { BetRecommender } from "./strategy/recommender.js";
 
 const KEYWORDS_PATH = path.join(process.env.HOME ?? ".", "polymarket-agent", ".keywords.json");
 
@@ -84,4 +87,52 @@ export function matchKeywordsToNews(
   }
 
   return matches;
+}
+
+// ── Smart Keyword Matching ──
+
+export interface SmartKeywordMatch extends KeywordMatch {
+  markets: MarketMatch[];
+  recommendations: BetRecommendation[];
+}
+
+export async function smartMatchKeywordsToNews(
+  newsItems: { title: string; summary: string; url?: string; id: string; publishedAt: Date; keywords: string[]; source: any; rawContent?: string }[],
+  matcher: MarketMatcher,
+  recommender: BetRecommender
+): Promise<SmartKeywordMatch[]> {
+  const basicMatches = matchKeywordsToNews(newsItems);
+  const smartMatches: SmartKeywordMatch[] = [];
+
+  // Deduplicate by news title to avoid redundant API calls
+  const processedTitles = new Set<string>();
+
+  for (const match of basicMatches) {
+    if (processedTitles.has(match.newsTitle)) continue;
+    processedTitles.add(match.newsTitle);
+
+    // Find the original news item
+    const newsItem = newsItems.find((n) => n.title === match.newsTitle);
+    if (!newsItem) {
+      smartMatches.push({ ...match, markets: [], recommendations: [] });
+      continue;
+    }
+
+    try {
+      const markets = await matcher.findMatchingMarkets(newsItem as any, 5);
+      const recommendations = markets.length > 0
+        ? recommender.recommend(newsItem as any, markets)
+        : [];
+
+      smartMatches.push({
+        ...match,
+        markets,
+        recommendations,
+      });
+    } catch {
+      smartMatches.push({ ...match, markets: [], recommendations: [] });
+    }
+  }
+
+  return smartMatches;
 }
