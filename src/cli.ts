@@ -58,7 +58,7 @@ import { addAlert, removeAlert, getAlerts, checkAlerts } from "./alerts.js";
 import { addKeyword, removeKeyword, getKeywords, matchKeywordsToNews, smartMatchKeywordsToNews } from "./keyword-alerts.js";
 import { getHistory, logRecommendations, updateResolutions, getAccuracyStats } from "./history.js";
 import { getPortfolioValue, buyPosition, sellPosition, resetPortfolio, getTradeHistory } from "./portfolio.js";
-import { recordPrices, getMomentum } from "./strategy/momentum.js";
+import { recordPrices, getMomentum, pruneOldSnapshots, getAllTrackedIds } from "./strategy/momentum.js";
 import { runBacktest } from "./strategy/backtest.js";
 import { getResolutionCalendar } from "./calendar.js";
 import { analyzeLiquidity } from "./strategy/liquidity.js";
@@ -183,6 +183,9 @@ program
     console.log();
     printMarkets(markets);
 
+    // Record prices for momentum tracking
+    recordPrices(markets);
+
     if (opts.export) {
       exportMarkets(markets, opts.export);
       printStatus(`exported to ${opts.export}`, "ok");
@@ -268,6 +271,10 @@ program
     printSectionHeader(`Results: "${query}"`, "◈");
     console.log();
     printMarkets(matches.map((m) => m.market));
+
+    // Record prices for momentum tracking
+    recordPrices(matches.map((m) => m.market));
+
     printTimestamp();
   });
 
@@ -370,11 +377,13 @@ program
     const keywords = getKeywords();
     const history = getHistory();
     const stats = getAccuracyStats();
+    const trackedIds = getAllTrackedIds();
     const featureLines: [string, string][] = [
       ["watchlist", `${wl.length} markets`],
       ["alerts", `${alerts.length} active`],
       ["keywords", `${keywords.length} watches`],
       ["history", `${history.length} recs (${(stats.winRate * 100).toFixed(0)}% win rate)`],
+      ["momentum", `${trackedIds.length} markets tracked`],
     ];
     for (const [k, v] of featureLines) {
       console.log(`  ${chalk.hex("#6B7280")(k.padEnd(18))} ${chalk.hex("#E5E7EB")(v)}`);
@@ -617,6 +626,11 @@ program
     const events = await polymarket.getTrendingEvents(Number(opts.limit));
     printStatus(`${events.length} trending events`, "ok");
     printTrending(events);
+
+    // Record prices for momentum tracking
+    const trendingMarkets = events.flatMap((e) => e.markets);
+    if (trendingMarkets.length > 0) recordPrices(trendingMarkets);
+
     printTimestamp();
   });
 
@@ -980,9 +994,47 @@ portfolioCmd
 program
   .command("momentum")
   .description("Show price momentum and sparkline for a market")
-  .argument("<query>", "Market search query")
-  .action(async (query) => {
+  .argument("[query]", "Market search query")
+  .option("--prune", "Remove snapshots older than 30 days")
+  .action(async (query, opts) => {
     printHeader();
+
+    if (opts.prune) {
+      const pruned = pruneOldSnapshots();
+      printStatus(`pruned ${pruned} old snapshots`, "ok");
+      printTimestamp();
+      return;
+    }
+
+    if (!query) {
+      // Show summary of all tracked markets
+      const ids = getAllTrackedIds();
+      if (ids.length === 0) {
+        printStatus("no price history yet — run scan, markets, or search to start tracking", "info");
+        printTimestamp();
+        return;
+      }
+      printStatus(`tracking ${ids.length} markets`, "ok");
+      printSectionHeader("Tracked Markets", "▲");
+      console.log();
+      let shown = 0;
+      for (const id of ids.slice(0, 20)) {
+        const m = getMomentum(id);
+        if (m) {
+          const trendIcon = m.trend === "up" ? chalk.hex("#10B981")("▲") : m.trend === "down" ? chalk.hex("#EF4444")("▼") : chalk.hex("#4B5563")("━");
+          const d24 = m.deltas["24h"];
+          const deltaStr = d24 !== null
+            ? (d24 >= 0 ? chalk.hex("#10B981")(`+${(d24 * 100).toFixed(1)}¢`) : chalk.hex("#EF4444")(`${(d24 * 100).toFixed(1)}¢`))
+            : chalk.hex("#4B5563")("—");
+          console.log(`  ${trendIcon} ${chalk.hex("#E5E7EB")(m.question.slice(0, 45).padEnd(45))} ${chalk.hex("#F59E0B")((m.currentPrice * 100).toFixed(0) + "¢")} ${deltaStr}  ${chalk.hex("#00E5FF")(m.sparkline)}`);
+          shown++;
+        }
+      }
+      if (ids.length > 20) console.log(chalk.hex("#4B5563")(`  ...and ${ids.length - 20} more`));
+      console.log();
+      printTimestamp();
+      return;
+    }
 
     printStatus(`searching: "${query}"...`);
     const markets = await polymarket.searchMarkets(query, 5);
@@ -997,7 +1049,7 @@ program
 
     const result = getMomentum(market.id, market.question);
     if (!result) {
-      printStatus("no price history yet — run scan or watch list to record prices", "info");
+      printStatus("no price history yet — run scan or search first to start tracking", "info");
       printStatus(`recorded current price: ${(market.outcomePrices[0] * 100).toFixed(0)}¢`, "ok");
       printTimestamp();
       return;
@@ -1187,11 +1239,17 @@ program
   .command("digest")
   .description("Generate a daily digest report")
   .option("--export <file>", "Export digest to markdown file")
+  .option("--no-scan", "Skip news scan (faster, uses existing data only)")
   .action(async (opts) => {
     printHeader();
 
     printStatus("generating daily digest...");
-    const digest = await generateDigest(polymarket, newsAgg, matcher, recommender);
+    const digest = await generateDigest(
+      polymarket,
+      opts.scan === false ? null : newsAgg,
+      opts.scan === false ? null : matcher,
+      opts.scan === false ? null : recommender,
+    );
     printDigest(digest);
 
     if (opts.export) {

@@ -13,9 +13,9 @@ import { getPortfolioValue } from "./portfolio.js";
 
 export async function generateDigest(
   client: PolymarketClient,
-  newsAgg: NewsAggregator,
-  matcher: MarketMatcher,
-  recommender: BetRecommender
+  newsAgg: NewsAggregator | null,
+  matcher: MarketMatcher | null,
+  recommender: BetRecommender | null,
 ): Promise<DigestData> {
   const now = new Date();
   const oneDayAgo = now.getTime() - 24 * 3_600_000;
@@ -65,21 +65,23 @@ export async function generateDigest(
     // skip alert check errors
   }
 
-  // 3. Top 5 new recommendations (mini-scan)
+  // 3. Top 5 new recommendations (mini-scan, skipped if newsAgg is null)
   const newRecommendations: BetRecommendation[] = [];
-  try {
-    const news = await newsAgg.fetchAll();
-    const items = news.slice(0, 10);
-    for (const item of items) {
-      const matches = await matcher.findMatchingMarkets(item, 5);
-      if (matches.length > 0) {
-        const recs = recommender.recommend(item, matches);
-        newRecommendations.push(...recs);
+  if (newsAgg && matcher && recommender) {
+    try {
+      const news = await newsAgg.fetchAll();
+      const items = news.slice(0, 10);
+      for (const item of items) {
+        const matches = await matcher.findMatchingMarkets(item, 5);
+        if (matches.length > 0) {
+          const recs = recommender.recommend(item, matches);
+          newRecommendations.push(...recs);
+        }
       }
+      newRecommendations.sort((a, b) => b.expectedValue - a.expectedValue);
+    } catch {
+      // skip scan errors
     }
-    newRecommendations.sort((a, b) => b.expectedValue - a.expectedValue);
-  } catch {
-    // skip scan errors
   }
 
   // 4. Recently resolved bets
