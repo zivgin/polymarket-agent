@@ -4,6 +4,8 @@ Prediction market intelligence terminal. Scans 15+ news feeds, matches headlines
 
 All features work with **public APIs only** — no wallet or API keys required.
 
+> **Geo-restricted regions:** The Polymarket website is blocked in certain countries (US, UAE, etc.), but the API endpoints used by this tool are **not blocked**. All read-only features work without a VPN.
+
 ## Quick Start
 
 ```bash
@@ -251,6 +253,27 @@ Also available as inline flags: `scan --export out.csv`, `markets --export out.j
 status                    # Dashboard: API status, config, feature counts
 ```
 
+## Market Coverage
+
+Polymarket primarily offers **futures and event-based markets**, not real-time game-by-game sports betting:
+
+- **Politics** — Elections, approval ratings, legislation, geopolitics (strongest coverage)
+- **Crypto** — Price targets, protocol milestones, regulatory events
+- **Sports futures** — Championship winners, season awards (NBA Finals, World Cup, MVP)
+- **AI/Tech** — Model releases, company milestones
+- **Novelty** — "Before GTA VI" markets, pop culture predictions
+
+For **same-day individual game betting** (spreads, O/U, props), traditional sportsbooks (DraftKings, FanDuel, BetMGM) are better suited.
+
+### Edge Detection Tips
+
+The tool's automated edge detection is conservative. For manual edge-hunting:
+
+1. **Compare Polymarket vs sportsbook odds** — Polymarket futures often lag behind sportsbook line movements
+2. **Watch 40-60¢ markets** — These are where mispricing is most likely
+3. **Cross-reference data sources** — Use `geo scan`, `news`, and web search to form your own probability estimate, then compare to market price
+4. **Check volume** — Low-volume markets (<$50K) may be mispriced but are hard to enter/exit
+
 ## Configuration
 
 Copy `.env.example` to `.env`. All variables are optional:
@@ -303,6 +326,29 @@ State files are stored in the project root as JSON (all gitignored):
 | dotenv | ^16.4 | Environment config |
 | ws | ^8.18 | WebSocket (reserved for future use) |
 | tsx | ^4.19 | TypeScript execution (dev) |
+
+## Example Workflow
+
+```bash
+# 1. Full news scan — match all feeds to markets
+npx tsx src/cli.ts scan
+
+# 2. Geopolitical scan — earthquakes, disasters, conflicts
+npx tsx src/cli.ts geo scan
+
+# 3. Search specific markets
+npx tsx src/cli.ts search "trump approval"
+npx tsx src/cli.ts search "NBA finals"
+
+# 4. Check for arbitrage
+npx tsx src/cli.ts arb
+
+# 5. Paper trade if you spot edge
+npx tsx src/cli.ts portfolio buy "thunder NBA finals" 50
+
+# 6. Track your positions
+npx tsx src/cli.ts portfolio show
+```
 
 ## Development
 

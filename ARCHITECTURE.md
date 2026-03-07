@@ -527,3 +527,7 @@ Dual approach for each news item:
 7. **Modular presentation** — All terminal output goes through `ui.ts`. No `console.log` in business logic modules. Export functionality is separate from display.
 
 8. **No external AI/LLM dependency** — Sentiment analysis uses a deterministic keyword-based approach. Fast, predictable, no API costs.
+
+9. **Geo-restriction bypass** — The Polymarket website is blocked in some regions (US, UAE, etc.), but the Gamma and CLOB API endpoints are accessible worldwide. This tool works from any location without a VPN.
+
+10. **Futures-focused** — Polymarket primarily lists futures and event-based markets (election outcomes, championship winners, price targets), not real-time game-by-game sports bets. The tool's edge detection is most effective for political and crypto markets where news feeds directly move prices.
