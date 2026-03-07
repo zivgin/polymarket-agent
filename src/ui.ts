@@ -1198,6 +1198,93 @@ export function printDigest(digest: DigestData) {
   }
 }
 
+// ── Geopolitical Events ──
+
+export function printGeoEvents(items: NewsItem[]) {
+  printSectionHeader("Geopolitical Events", "◉");
+  console.log();
+
+  if (items.length === 0) {
+    console.log(c.dim("  no events found"));
+    console.log();
+    return;
+  }
+
+  for (const item of items) {
+    const time = item.publishedAt.toLocaleTimeString("en-US", {
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: false,
+    });
+
+    const sourceLabel =
+      item.source.type === "web" ? item.source.site : "Unknown";
+
+    // Color alerts
+    let titleStr = item.title;
+    if (item.title.includes("[RED ALERT]")) {
+      titleStr = c.short(item.title);
+    } else if (item.title.includes("[ORANGE ALERT]")) {
+      titleStr = c.warn(item.title);
+    } else if (item.title.includes("[TSUNAMI WARNING]")) {
+      titleStr = c.short(item.title);
+    } else if (item.title.includes("[PAGER: RED]") || item.title.includes("[PAGER: ORANGE]")) {
+      titleStr = c.warn(item.title);
+    } else {
+      titleStr = c.value(item.title.slice(0, 75));
+    }
+
+    console.log(
+      c.dim(`  ${time}`) + "  " +
+      c.purple(sourceLabel.slice(0, 14).padEnd(14)) + "  " +
+      titleStr
+    );
+
+    if (item.summary && !item.summary.startsWith("Source:")) {
+      console.log(c.dim(`                           ${item.summary.slice(0, 75)}`));
+    }
+  }
+
+  console.log();
+  console.log(c.dim(`  ${items.length} events`));
+  console.log();
+}
+
+// ── GDELT Timeline ──
+
+export function printGdeltTimeline(query: string, timeline: Array<{ date: string; value: number }>) {
+  printSectionHeader(`GDELT Volume: "${query}"`, "▲");
+  console.log();
+
+  if (timeline.length === 0) {
+    console.log(c.dim("  no data"));
+    console.log();
+    return;
+  }
+
+  const maxVal = Math.max(...timeline.map((t) => t.value), 0.001);
+  const barWidth = 40;
+
+  for (const point of timeline) {
+    const dateStr = point.date.slice(0, 8);
+    const y = dateStr.slice(0, 4);
+    const m = dateStr.slice(4, 6);
+    const d = dateStr.slice(6, 8);
+    const label = `${m}/${d}`;
+
+    const barLen = Math.round((point.value / maxVal) * barWidth);
+    const intensity = point.value / maxVal;
+    const barColor = intensity > 0.7 ? c.short : intensity > 0.4 ? c.amber : c.brand;
+    const bar = barColor("█".repeat(barLen)) + c.muted("░".repeat(barWidth - barLen));
+
+    console.log(`  ${c.dim(label)} ${bar} ${c.value((point.value * 100).toFixed(1) + "%")}`);
+  }
+
+  console.log();
+  console.log(c.dim("  volume intensity = % of all global news coverage"));
+  console.log();
+}
+
 // ── Utility ──
 
 function priceTag(price: number): string {

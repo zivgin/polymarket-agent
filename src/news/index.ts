@@ -2,6 +2,7 @@ import type { NewsItem, AgentConfig } from "../types/index.js";
 import { fetchRssFeeds } from "./rss.js";
 import { fetchAllTelegramChannels } from "./telegram.js";
 import { WebScraper } from "./scraper.js";
+import { fetchAllGeopoliticalEvents } from "./geopolitical.js";
 
 export class NewsAggregator {
   private scraper: WebScraper;
@@ -13,9 +14,10 @@ export class NewsAggregator {
   }
 
   async fetchAll(): Promise<NewsItem[]> {
-    const [rssItems, telegramItems] = await Promise.allSettled([
+    const [rssItems, telegramItems, geoItems] = await Promise.allSettled([
       fetchRssFeeds(this.config.news.rssFeeds),
       fetchAllTelegramChannels(this.config.telegram.channels),
+      fetchAllGeopoliticalEvents(),
     ]);
 
     const items: NewsItem[] = [];
@@ -30,6 +32,10 @@ export class NewsAggregator {
       items.push(...telegramItems.value);
     } else {
       console.error("[news] Telegram fetch failed:", telegramItems.reason);
+    }
+
+    if (geoItems.status === "fulfilled") {
+      items.push(...geoItems.value);
     }
 
     // Deduplicate by similar titles

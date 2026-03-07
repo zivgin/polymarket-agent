@@ -186,6 +186,28 @@ digest [options]          # All-in-one daily report
 
 Combines: watchlist changes, triggered alerts, top recommendations, resolved bets, upcoming resolutions, and portfolio summary.
 
+### Geopolitical Intelligence
+
+```bash
+geo events               # All active events (USGS + NASA + GDACS)
+geo events --quakes      # Earthquakes only (USGS M4.5+)
+geo events --disasters   # Orange/Red disaster alerts (GDACS)
+geo events --natural     # Natural events: fires, storms, volcanoes (NASA)
+
+geo gdelt <query>        # Search GDELT global news database
+geo gdelt <query> --timeline   # Volume intensity chart over time
+geo gdelt <query> -d 14  # Timeline for last 14 days
+
+geo scan                 # Match geopolitical events to Polymarket + recommend
+```
+
+All geopolitical sources are also automatically included in `scan` and `news` feeds. No API keys required — these are all free public feeds:
+
+- **GDELT** — Global Database of Events, Language, and Tone (250M+ articles)
+- **USGS** — Real-time earthquake data (M4.5+ with PAGER alerts)
+- **NASA EONET** — Wildfires, tropical cyclones, volcanoes, floods
+- **GDACS** — Global disaster alerts with humanitarian impact scores
+
 ### Data Export
 
 ```bash
@@ -229,6 +251,8 @@ Copy `.env.example` to `.env`. All variables are optional:
 **RSS (15 feeds):** NYT (World, Politics, Business, Tech), BBC World, Reuters, Bloomberg (Politics, Markets), NPR, CoinDesk, CoinTelegraph, Decrypt, The Block, Ars Technica, ESPN
 
 **Telegram (3 channels):** polyaborygen, WhaleTrades, cryptonews
+
+**Geopolitical (4 sources, no keys needed):** GDELT (global news database), USGS (earthquakes), NASA EONET (natural events), GDACS (disaster alerts)
 
 ## Persistent Data
 

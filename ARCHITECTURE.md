@@ -32,6 +32,10 @@
 │  Gamma API ──── gamma-api.polymarket.com ──── markets, events, tags    │
 │  CLOB API ───── clob.polymarket.com ───────── orderbook, prices        │
 │  Reddit ─────── old.reddit.com/search.json ── social signals           │
+│  GDELT ──────── api.gdeltproject.org ──────── global news database     │
+│  USGS ───────── earthquake.usgs.gov ──────── seismic events            │
+│  NASA EONET ─── eonet.gsfc.nasa.gov ──────── natural disasters         │
+│  GDACS ──────── gdacs.org/gdacsapi ────────── disaster alerts          │
 │  RSS ────────── 15 feeds (NYT, BBC, Bloomberg, CoinDesk, ESPN...)      │
 │  Telegram ───── 3 channels (polyaborygen, WhaleTrades, cryptonews)     │
 │  Firecrawl ──── firecrawl.dev ─────────────── article scraping         │
@@ -66,7 +70,8 @@ polymarket-agent/
 │   │   ├── rss.ts                # RSS parser (rss-parser library)
 │   │   ├── telegram.ts           # Telegram channel integration
 │   │   ├── scraper.ts            # Firecrawl web scraper
-│   │   └── social.ts             # Reddit social signal scanner
+│   │   ├── social.ts             # Reddit social signal scanner
+│   │   └── geopolitical.ts      # GDELT + USGS + NASA EONET + GDACS
 │   │
 │   ├── matcher/
 │   │   └── index.ts              # News-to-market matching engine
@@ -314,6 +319,21 @@ Reddit mention scanner:
 - Queries `old.reddit.com/search.json` with proper User-Agent
 - Reuses positive/negative word lists from recommender for sentiment classification
 - Returns mention count, sentiment breakdown (pos/neg/neutral), and top posts by score
+
+### Geopolitical Data Sources (`news/geopolitical.ts`)
+
+Four free, keyless APIs integrated as both standalone commands and automatic news pipeline enrichment:
+
+| Source | API | Data | Update Frequency |
+|--------|-----|------|-----------------|
+| **GDELT** | `api.gdeltproject.org/api/v2/doc` | Global news articles + volume timeline | Real-time (rate: 1 req/5s) |
+| **USGS** | `earthquake.usgs.gov/earthquakes/feed` | M4.5+ earthquakes with PAGER alerts | Every minute |
+| **NASA EONET** | `eonet.gsfc.nasa.gov/api/v3/events` | Wildfires, cyclones, volcanoes, floods | Hourly |
+| **GDACS** | `gdacs.org/gdacsapi/api/events` | Disaster alerts (Green/Orange/Red) with humanitarian impact | Real-time |
+
+All sources are fetched in parallel via `fetchAllGeopoliticalEvents()` and automatically merged into the `NewsAggregator.fetchAll()` pipeline alongside RSS and Telegram. Events are converted to `NewsItem` format for seamless matching against Polymarket.
+
+GDELT also provides a unique `timelinevol` mode — media volume intensity over time for any topic, useful for detecting building narratives before markets price them in.
 
 ### Resolution Calendar (`calendar.ts`)
 

@@ -47,6 +47,8 @@ import {
   printSocialSignals,
   printEventTree,
   printDigest,
+  printGeoEvents,
+  printGdeltTimeline,
 } from "./ui.js";
 import { addToWatchlist, removeFromWatchlist, getWatchlist, clearWatchlist } from "./watchlist.js";
 import { isTelegramConfigured } from "./news/index.js";
@@ -66,6 +68,13 @@ import { analyzePortfolioRisk } from "./strategy/portfolio-risk.js";
 import { fetchRedditSignals } from "./news/social.js";
 import { buildEventTree } from "./strategy/event-graph.js";
 import { generateDigest, digestToMarkdown } from "./digest.js";
+import {
+  fetchGdeltArticles, fetchGdeltTimeline,
+  fetchEarthquakes, earthquakesToNewsItems,
+  fetchEonetEvents, eonetToNewsItems,
+  fetchGdacsEvents, gdacsToNewsItems,
+  fetchAllGeopoliticalEvents,
+} from "./news/geopolitical.js";
 import type { BetRecommendation, Market, MarketMatch, NewsItem } from "./types/index.js";
 import fs from "fs";
 
@@ -352,6 +361,26 @@ program
         name: "Firecrawl",
         ok: !!config.firecrawl.apiKey,
         detail: config.firecrawl.apiKey ? "api key set" : "set FIRECRAWL_API_KEY",
+      },
+      {
+        name: "GDELT",
+        ok: true,
+        detail: "global news database (no key needed)",
+      },
+      {
+        name: "USGS Earthquakes",
+        ok: true,
+        detail: "real-time seismic data (no key needed)",
+      },
+      {
+        name: "NASA EONET",
+        ok: true,
+        detail: "natural event tracker (no key needed)",
+      },
+      {
+        name: "GDACS",
+        ok: true,
+        detail: "disaster alerts (no key needed)",
       },
     ];
 
@@ -1256,6 +1285,119 @@ program
       const md = digestToMarkdown(digest);
       fs.writeFileSync(opts.export, md);
       printStatus(`exported to ${opts.export}`, "ok");
+    }
+
+    printTimestamp();
+  });
+
+// ── geo ──
+const geoCmd = program
+  .command("geo")
+  .description("Browse real-time geopolitical and natural disaster events");
+
+geoCmd
+  .command("events")
+  .description("Show all active geopolitical events (USGS + NASA + GDACS)")
+  .option("--quakes", "Only show earthquakes (USGS)")
+  .option("--disasters", "Only show disasters (GDACS Orange/Red)")
+  .option("--natural", "Only show natural events (NASA EONET)")
+  .action(async (opts) => {
+    printHeader();
+
+    let items: NewsItem[] = [];
+
+    if (opts.quakes) {
+      printStatus("fetching earthquakes (USGS)...");
+      items = earthquakesToNewsItems(await fetchEarthquakes());
+    } else if (opts.disasters) {
+      printStatus("fetching disaster alerts (GDACS)...");
+      items = gdacsToNewsItems(await fetchGdacsEvents({ alertLevel: "Orange;Red" }));
+    } else if (opts.natural) {
+      printStatus("fetching natural events (NASA EONET)...");
+      items = eonetToNewsItems(await fetchEonetEvents({ days: 7 }));
+    } else {
+      printStatus("fetching all geopolitical sources...");
+      items = await fetchAllGeopoliticalEvents();
+    }
+
+    printStatus(`${items.length} events from geopolitical sources`, items.length > 0 ? "ok" : "info");
+    printGeoEvents(items);
+    printTimestamp();
+  });
+
+geoCmd
+  .command("gdelt")
+  .description("Search GDELT global news database")
+  .argument("<query>", "Search query (e.g., 'ukraine ceasefire', 'iran nuclear')")
+  .option("-l, --limit <n>", "Max articles", "20")
+  .option("--timeline", "Show volume timeline instead of articles")
+  .option("-d, --days <n>", "Timeline days back", "7")
+  .action(async (query, opts) => {
+    printHeader();
+
+    if (opts.timeline) {
+      printStatus(`fetching GDELT timeline for "${query}"...`);
+      const timeline = await fetchGdeltTimeline(query, Number(opts.days));
+      if (timeline.length === 0) {
+        printStatus("no timeline data — try a broader query", "info");
+      } else {
+        printGdeltTimeline(query, timeline);
+      }
+    } else {
+      printStatus(`searching GDELT for "${query}"...`);
+      const articles = await fetchGdeltArticles(query, Number(opts.limit));
+      if (articles.length === 0) {
+        printStatus("no articles found — GDELT rate-limits to 1 req/5s", "info");
+      } else {
+        printStatus(`${articles.length} articles`, "ok");
+        printGeoEvents(articles);
+      }
+    }
+
+    printTimestamp();
+  });
+
+geoCmd
+  .command("scan")
+  .description("Scan geopolitical events and match to Polymarket")
+  .action(async () => {
+    printHeader();
+
+    printStatus("fetching geopolitical events...");
+    const geoItems = await fetchAllGeopoliticalEvents();
+    printStatus(`${geoItems.length} events from USGS/NASA/GDACS`, "ok");
+
+    if (geoItems.length === 0) {
+      printStatus("no events to match", "info");
+      printTimestamp();
+      return;
+    }
+
+    printStatus("matching to polymarket...");
+    const allRecs: BetRecommendation[] = [];
+    const allMatches: { news: NewsItem; matches: MarketMatch[] }[] = [];
+
+    for (const item of geoItems.slice(0, 15)) {
+      const matches = await matcher.findMatchingMarkets(item, 5);
+      if (matches.length > 0) {
+        allMatches.push({ news: item, matches });
+        const recs = recommender.recommend(item, matches);
+        allRecs.push(...recs);
+      }
+    }
+
+    printStatus(`${allMatches.length} events matched to markets`, "ok");
+
+    if (allMatches.length > 0) {
+      printScanMatches(allMatches);
+    } else {
+      printStatus("no geopolitical events matched to active markets", "info");
+    }
+
+    if (allRecs.length > 0) {
+      allRecs.sort((a, b) => b.expectedValue - a.expectedValue);
+      printRecommendations(allRecs.slice(0, 10));
+      logRecommendations(allRecs.slice(0, 10));
     }
 
     printTimestamp();
