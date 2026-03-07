@@ -12,6 +12,7 @@ import type {
   EventTree, DigestData, SocialSignal, OrderBook,
 } from "./types/index.js";
 import type { PortfolioRisk } from "./strategy/portfolio-risk.js";
+import type { GeoAlert, GdeltToneResult } from "./news/geopolitical.js";
 
 // ── Color Palette ──
 // Financial terminal: dark bg assumed, cyan data, amber prices, green/red signals
@@ -1282,6 +1283,102 @@ export function printGdeltTimeline(query: string, timeline: Array<{ date: string
 
   console.log();
   console.log(c.dim("  volume intensity = % of all global news coverage"));
+  console.log();
+}
+
+// ── Geo Alerts (High Signal) ──
+
+export function printGeoAlerts(alerts: GeoAlert[]) {
+  printSectionHeader("High Signal Alerts", "!!");
+  console.log();
+
+  if (alerts.length === 0) {
+    console.log(c.dim("  no high-signal events detected"));
+    console.log();
+    return;
+  }
+
+  const severityColor = (s: string) =>
+    s === "critical" ? c.short : s === "high" ? c.warn : c.amber;
+
+  const severityLabel = (s: string) =>
+    s === "critical" ? " CRITICAL " : s === "high" ? "   HIGH   " : "  MEDIUM  ";
+
+  for (const alert of alerts) {
+    const time = alert.publishedAt.toLocaleTimeString("en-US", {
+      hour: "2-digit", minute: "2-digit", hour12: false,
+    });
+
+    const badge = severityColor(alert.severity)(severityLabel(alert.severity));
+    const src = c.purple(alert.source.padEnd(5));
+    const pop = alert.population && alert.population > 0
+      ? c.warn(` [${fmtPop(alert.population)} exposed]`)
+      : "";
+
+    console.log(`  ${badge} ${src} ${c.dim(time)}  ${c.value(alert.title.slice(0, 60))}${pop}`);
+    console.log(c.dim(`                              ${alert.summary.slice(0, 70)}`));
+  }
+
+  const critical = alerts.filter((a) => a.severity === "critical").length;
+  const high = alerts.filter((a) => a.severity === "high").length;
+  console.log();
+  console.log(
+    c.dim("  ") +
+    (critical > 0 ? c.short(`${critical} critical`) + c.dim(" | ") : "") +
+    (high > 0 ? c.warn(`${high} high`) + c.dim(" | ") : "") +
+    c.dim(`${alerts.length} total alerts`)
+  );
+  console.log();
+}
+
+function fmtPop(pop: number): string {
+  if (pop >= 1_000_000) return `${(pop / 1_000_000).toFixed(1)}M`;
+  if (pop >= 1_000) return `${(pop / 1_000).toFixed(0)}K`;
+  return String(pop);
+}
+
+// ── GDELT Tone Analysis ──
+
+export function printGdeltTone(result: GdeltToneResult) {
+  printSectionHeader(`GDELT Tone: "${result.query}"`, "~");
+  console.log();
+
+  const toneColor = result.avgTone > 1 ? c.long : result.avgTone < -1 ? c.short : c.amber;
+  const toneLabel = result.avgTone > 2 ? "Very Positive" : result.avgTone > 0.5 ? "Positive"
+    : result.avgTone < -2 ? "Very Negative" : result.avgTone < -0.5 ? "Negative" : "Neutral";
+
+  console.log(`  ${c.label("Average Tone:")} ${toneColor(`${result.avgTone > 0 ? "+" : ""}${result.avgTone.toFixed(2)}`)} ${c.dim(`(${toneLabel})`)}`);
+  console.log();
+
+  if (result.toneTimeline.length > 0) {
+    const maxAbs = Math.max(...result.toneTimeline.map((t) => Math.abs(t.value)), 0.001);
+    const barWidth = 30;
+
+    for (const point of result.toneTimeline) {
+      const dateStr = point.date?.slice(0, 8) ?? "";
+      const m = dateStr.slice(4, 6);
+      const d = dateStr.slice(6, 8);
+      const label = `${m}/${d}`;
+
+      const normalized = point.value / maxAbs;
+      const barLen = Math.round(Math.abs(normalized) * barWidth);
+      const color = point.value > 0 ? c.long : point.value < -0.5 ? c.short : c.amber;
+
+      if (point.value >= 0) {
+        const pad = " ".repeat(barWidth);
+        const bar = color("█".repeat(barLen));
+        console.log(`  ${c.dim(label)} ${pad}${c.dim("│")}${bar} ${c.value(point.value.toFixed(2))}`);
+      } else {
+        const pad = " ".repeat(barWidth - barLen);
+        const bar = color("█".repeat(barLen));
+        console.log(`  ${c.dim(label)} ${pad}${bar}${c.dim("│")} ${c.value(point.value.toFixed(2))}`);
+      }
+    }
+
+    console.log(`  ${" ".repeat(5)} ${c.dim("─".repeat(barWidth) + "┼" + "─".repeat(barWidth))}`);
+    console.log(`  ${" ".repeat(5)} ${c.dim(" ".repeat(barWidth - 4) + "negative")} ${c.dim("positive")}`);
+  }
+
   console.log();
 }
 

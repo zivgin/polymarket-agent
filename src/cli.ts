@@ -49,6 +49,8 @@ import {
   printDigest,
   printGeoEvents,
   printGdeltTimeline,
+  printGeoAlerts,
+  printGdeltTone,
 } from "./ui.js";
 import { addToWatchlist, removeFromWatchlist, getWatchlist, clearWatchlist } from "./watchlist.js";
 import { isTelegramConfigured } from "./news/index.js";
@@ -69,12 +71,15 @@ import { fetchRedditSignals } from "./news/social.js";
 import { buildEventTree } from "./strategy/event-graph.js";
 import { generateDigest, digestToMarkdown } from "./digest.js";
 import {
-  fetchGdeltArticles, fetchGdeltTimeline,
+  fetchGdeltArticles, fetchGdeltTimeline, fetchGdeltByTheme, fetchGdeltTone,
+  fetchGdeltTvMentions, fetchHighSignalAlerts,
   fetchEarthquakes, earthquakesToNewsItems,
   fetchEonetEvents, eonetToNewsItems,
   fetchGdacsEvents, gdacsToNewsItems,
   fetchAllGeopoliticalEvents,
+  GDELT_THEMES,
 } from "./news/geopolitical.js";
+import type { GdeltThemeKey } from "./news/geopolitical.js";
 import type { BetRecommendation, Market, MarketMatch, NewsItem } from "./types/index.js";
 import fs from "fs";
 
@@ -1301,14 +1306,19 @@ geoCmd
   .option("--quakes", "Only show earthquakes (USGS)")
   .option("--disasters", "Only show disasters (GDACS Orange/Red)")
   .option("--natural", "Only show natural events (NASA EONET)")
+  .option("--min-mag <n>", "Minimum earthquake magnitude (e.g., 6.0)")
+  .option("--tsunami", "Only show tsunami-warning earthquakes")
   .action(async (opts) => {
     printHeader();
 
     let items: NewsItem[] = [];
 
-    if (opts.quakes) {
+    if (opts.quakes || opts.minMag || opts.tsunami) {
       printStatus("fetching earthquakes (USGS)...");
-      items = earthquakesToNewsItems(await fetchEarthquakes());
+      const quakeOpts: any = {};
+      if (opts.minMag) quakeOpts.minMagnitude = Number(opts.minMag);
+      if (opts.tsunami) quakeOpts.tsunamiOnly = true;
+      items = earthquakesToNewsItems(await fetchEarthquakes(Object.keys(quakeOpts).length > 0 ? quakeOpts : undefined));
     } else if (opts.disasters) {
       printStatus("fetching disaster alerts (GDACS)...");
       items = gdacsToNewsItems(await fetchGdacsEvents({ alertLevel: "Orange;Red" }));
@@ -1331,11 +1341,23 @@ geoCmd
   .argument("<query>", "Search query (e.g., 'ukraine ceasefire', 'iran nuclear')")
   .option("-l, --limit <n>", "Max articles", "20")
   .option("--timeline", "Show volume timeline instead of articles")
-  .option("-d, --days <n>", "Timeline days back", "7")
+  .option("--tone", "Show tone/sentiment analysis")
+  .option("-d, --days <n>", "Timeline/tone days back", "7")
+  .option("--theme <code>", "Filter by GDELT theme code (e.g., ELECTION, PROTEST)")
+  .option("--lang <code>", "Filter by source language (e.g., english, spanish)")
+  .option("--country <code>", "Filter by source country (e.g., US, UK, CN)")
   .action(async (query, opts) => {
     printHeader();
 
-    if (opts.timeline) {
+    if (opts.tone) {
+      printStatus(`fetching GDELT tone for "${query}"...`);
+      const result = await fetchGdeltTone(query, Number(opts.days));
+      if (result.toneTimeline.length === 0) {
+        printStatus("no tone data — try a broader query", "info");
+      } else {
+        printGdeltTone(result);
+      }
+    } else if (opts.timeline) {
       printStatus(`fetching GDELT timeline for "${query}"...`);
       const timeline = await fetchGdeltTimeline(query, Number(opts.days));
       if (timeline.length === 0) {
@@ -1344,8 +1366,13 @@ geoCmd
         printGdeltTimeline(query, timeline);
       }
     } else {
+      const advOpts: any = {};
+      if (opts.theme) advOpts.theme = opts.theme;
+      if (opts.lang) advOpts.sourcelang = opts.lang;
+      if (opts.country) advOpts.sourcecountry = opts.country;
+
       printStatus(`searching GDELT for "${query}"...`);
-      const articles = await fetchGdeltArticles(query, Number(opts.limit));
+      const articles = await fetchGdeltArticles(query, Number(opts.limit), Object.keys(advOpts).length > 0 ? advOpts : undefined);
       if (articles.length === 0) {
         printStatus("no articles found — GDELT rate-limits to 1 req/5s", "info");
       } else {
@@ -1354,6 +1381,143 @@ geoCmd
       }
     }
 
+    printTimestamp();
+  });
+
+geoCmd
+  .command("alerts")
+  .description("High-signal alerts only — critical/high severity events for fast decisions")
+  .option("--match", "Auto-match alerts to Polymarket markets")
+  .action(async (opts) => {
+    printHeader();
+    printStatus("fetching high-signal alerts (USGS + GDACS + EONET)...");
+    const alerts = await fetchHighSignalAlerts();
+    printStatus(`${alerts.length} high-signal alerts`, alerts.length > 0 ? "ok" : "info");
+    printGeoAlerts(alerts);
+
+    if (opts.match && alerts.length > 0) {
+      printStatus("matching alerts to polymarket...");
+      const allRecs: BetRecommendation[] = [];
+      const allMatches: { news: NewsItem; matches: MarketMatch[] }[] = [];
+
+      for (const alert of alerts.slice(0, 10)) {
+        const newsItem: NewsItem = {
+          id: `alert_${Date.now()}`,
+          title: alert.title,
+          summary: alert.summary,
+          source: { type: "web" as const, site: alert.source },
+          url: alert.url,
+          publishedAt: alert.publishedAt,
+          keywords: alert.keywords,
+        };
+        const matches = await matcher.findMatchingMarkets(newsItem, 5);
+        if (matches.length > 0) {
+          allMatches.push({ news: newsItem, matches });
+          allRecs.push(...recommender.recommend(newsItem, matches));
+        }
+      }
+
+      if (allMatches.length > 0) {
+        printScanMatches(allMatches);
+        allRecs.sort((a, b) => b.expectedValue - a.expectedValue);
+        printRecommendations(allRecs.slice(0, 10));
+        logRecommendations(allRecs.slice(0, 10));
+      } else {
+        printStatus("no alerts matched to active markets", "info");
+      }
+    }
+
+    printTimestamp();
+  });
+
+geoCmd
+  .command("themes")
+  .description("Browse GDELT structured themes (elections, conflicts, sanctions...)")
+  .argument("[theme]", `Theme key: ${Object.keys(GDELT_THEMES).join(", ")}`)
+  .option("-l, --limit <n>", "Max articles", "15")
+  .option("--list", "List all available theme keys")
+  .action(async (theme, opts) => {
+    printHeader();
+
+    if (opts.list || !theme) {
+      printSectionHeader("GDELT Themes", "#");
+      console.log();
+      for (const [key, code] of Object.entries(GDELT_THEMES)) {
+        console.log(`  ${chalk.hex("#A78BFA")(key.padEnd(20))} ${chalk.hex("#6B7280")(code)}`);
+      }
+      console.log();
+      console.log(chalk.hex("#4B5563")("  usage: geo themes <key>  (e.g., geo themes elections)"));
+      console.log();
+      printTimestamp();
+      return;
+    }
+
+    if (!(theme in GDELT_THEMES)) {
+      printStatus(`unknown theme "${theme}" — use --list to see available themes`, "info");
+      printTimestamp();
+      return;
+    }
+
+    printStatus(`fetching GDELT theme: ${theme} (${GDELT_THEMES[theme as GdeltThemeKey]})...`);
+    const articles = await fetchGdeltByTheme(theme as GdeltThemeKey, Number(opts.limit));
+
+    if (articles.length === 0) {
+      printStatus("no articles — GDELT rate-limits to 1 req/5s, try again shortly", "info");
+    } else {
+      printStatus(`${articles.length} articles for theme: ${theme}`, "ok");
+      printGeoEvents(articles);
+    }
+
+    printTimestamp();
+  });
+
+geoCmd
+  .command("tone")
+  .description("Analyze global media sentiment/tone on a topic (GDELT)")
+  .argument("<query>", "Topic to analyze (e.g., 'iran nuclear', 'bitcoin regulation')")
+  .option("-d, --days <n>", "Days back", "7")
+  .action(async (query, opts) => {
+    printHeader();
+    printStatus(`analyzing GDELT tone for "${query}"...`);
+    const result = await fetchGdeltTone(query, Number(opts.days));
+
+    if (result.toneTimeline.length === 0) {
+      printStatus("no tone data — try a broader query or wait 5s (rate limit)", "info");
+    } else {
+      printGdeltTone(result);
+    }
+
+    printTimestamp();
+  });
+
+geoCmd
+  .command("tv")
+  .description("Track US cable news mentions of a topic (GDELT TV API)")
+  .argument("<query>", "Topic to track")
+  .action(async (query) => {
+    printHeader();
+    printStatus(`checking TV mentions for "${query}"...`);
+    const result = await fetchGdeltTvMentions(query, "stationdetail");
+
+    if (!result.stations || Object.keys(result.stations).length === 0) {
+      printStatus("no TV mentions found in last 24h", "info");
+      printTimestamp();
+      return;
+    }
+
+    printSectionHeader(`TV Mentions: "${query}" (24h)`, "TV");
+    console.log();
+
+    const entries = Object.entries(result.stations).sort((a, b) => b[1] - a[1]);
+    const maxVal = Math.max(...entries.map(([, v]) => v), 0.001);
+
+    for (const [station, count] of entries) {
+      const barLen = Math.round((count / maxVal) * 30);
+      const bar = chalk.hex("#00E5FF")("█".repeat(barLen)) + chalk.hex("#374151")("░".repeat(30 - barLen));
+      console.log(`  ${chalk.hex("#A78BFA")(station.padEnd(12))} ${bar} ${chalk.hex("#E5E7EB")(String(count))}`);
+    }
+
+    console.log();
     printTimestamp();
   });
 
