@@ -189,24 +189,48 @@ Combines: watchlist changes, triggered alerts, top recommendations, resolved bet
 ### Geopolitical Intelligence
 
 ```bash
+# Quick decision-making
+geo alerts               # High-signal events only (critical/high severity)
+geo alerts --match       # Auto-match alerts to Polymarket + recommend
+
+# Browse events
 geo events               # All active events (USGS + NASA + GDACS)
 geo events --quakes      # Earthquakes only (USGS M4.5+)
+geo events --min-mag 6   # Earthquakes M6.0+
+geo events --tsunami     # Only tsunami-warning quakes
 geo events --disasters   # Orange/Red disaster alerts (GDACS)
 geo events --natural     # Natural events: fires, storms, volcanoes (NASA)
 
-geo gdelt <query>        # Search GDELT global news database
+# GDELT global news database
+geo gdelt <query>              # Search articles
 geo gdelt <query> --timeline   # Volume intensity chart over time
-geo gdelt <query> -d 14  # Timeline for last 14 days
+geo gdelt <query> --tone       # Sentiment/tone analysis with timeline
+geo gdelt <query> --theme ELECTION  # Filter by GDELT theme code
+geo gdelt <query> --lang english    # Filter by source language
+geo gdelt <query> --country US      # Filter by source country
 
+# Structured GDELT themes
+geo themes               # List all available theme keys
+geo themes elections     # Articles tagged with ELECTION theme
+geo themes sanctions     # Articles tagged with ECON_SANCTIONS
+geo themes terror        # Articles tagged with TERROR
+
+# Media monitoring
+geo tone <query>         # Global media sentiment analysis
+geo tv <query>           # US cable news mentions (last 24h by station)
+
+# Match to markets
 geo scan                 # Match geopolitical events to Polymarket + recommend
 ```
 
 All geopolitical sources are also automatically included in `scan` and `news` feeds. No API keys required — these are all free public feeds:
 
-- **GDELT** — Global Database of Events, Language, and Tone (250M+ articles)
-- **USGS** — Real-time earthquake data (M4.5+ with PAGER alerts)
-- **NASA EONET** — Wildfires, tropical cyclones, volcanoes, floods
-- **GDACS** — Global disaster alerts with humanitarian impact scores
+- **GDELT** — Global Database of Events, Language, and Tone (250M+ articles, 6 API modes)
+- **USGS** — Real-time earthquake data with PAGER alerts, tsunami warnings, felt reports
+- **NASA EONET** — 13 categories: wildfires, storms, volcanoes, floods, landslides, etc.
+- **GDACS** — Global disaster alerts with population exposure and vulnerability scores
+
+**GDELT Theme Codes:** elections, protests, terror, armedConflict, militaryForce, ceasefires, negotiations, sanctions, pandemic, nuclearWeapons, coupAttempt, naturalDisaster, economicCrisis, tradeWar
 
 ### Data Export
 

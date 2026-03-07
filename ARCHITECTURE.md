@@ -4,11 +4,11 @@
 
 ```
 ┌────────────────────────────────────────────────────────────────────────┐
-│                            CLI Layer (~1,200 LOC)                      │
-│  cli.ts — 28 commands via Commander.js, orchestrates all modules       │
+│                            CLI Layer (~1,400 LOC)                      │
+│  cli.ts — 34 commands via Commander.js, orchestrates all modules       │
 ├────────────────────────────────────────────────────────────────────────┤
-│                       Presentation Layer (~1,300 LOC)                  │
-│  ui.ts — 41 exported functions: tables, bars, cards, dashboards        │
+│                       Presentation Layer (~1,400 LOC)                  │
+│  ui.ts — 43 exported functions: tables, bars, cards, dashboards        │
 │  export.ts — JSON/CSV serialization for markets, recs, watchlist       │
 ├───────────────────┬───────────────────┬────────────────────────────────┤
 │  Strategy (~1,300)│  State (696)      │  Data Sources (~450)           │
@@ -32,24 +32,24 @@
 │  Gamma API ──── gamma-api.polymarket.com ──── markets, events, tags    │
 │  CLOB API ───── clob.polymarket.com ───────── orderbook, prices        │
 │  Reddit ─────── old.reddit.com/search.json ── social signals           │
-│  GDELT ──────── api.gdeltproject.org ──────── global news database     │
-│  USGS ───────── earthquake.usgs.gov ──────── seismic events            │
-│  NASA EONET ─── eonet.gsfc.nasa.gov ──────── natural disasters         │
-│  GDACS ──────── gdacs.org/gdacsapi ────────── disaster alerts          │
+│  GDELT ──────── api.gdeltproject.org ──────── news, tone, geo, TV APIs │
+│  USGS ───────── earthquake.usgs.gov ──────── seismic + query API       │
+│  NASA EONET ─── eonet.gsfc.nasa.gov ──────── 13 natural event types    │
+│  GDACS ──────── gdacs.org/gdacsapi ────────── alerts + population data │
 │  RSS ────────── 15 feeds (NYT, BBC, Bloomberg, CoinDesk, ESPN...)      │
 │  Telegram ───── 3 channels (polyaborygen, WhaleTrades, cryptonews)     │
 │  Firecrawl ──── firecrawl.dev ─────────────── article scraping         │
 └────────────────────────────────────────────────────────────────────────┘
 ```
 
-**Total:** ~5,400 lines of TypeScript across 26 source files.
+**Total:** ~6,000 lines of TypeScript across 26 source files.
 
 ## Directory Structure
 
 ```
 polymarket-agent/
 ├── src/
-│   ├── cli.ts                    # Entry point — 28 command groups
+│   ├── cli.ts                    # Entry point — 34 command groups
 │   ├── config.ts                 # Environment variable loading + defaults
 │   ├── ui.ts                     # Terminal rendering (41 print functions)
 │   ├── export.ts                 # JSON/CSV file serialization
@@ -322,18 +322,26 @@ Reddit mention scanner:
 
 ### Geopolitical Data Sources (`news/geopolitical.ts`)
 
-Four free, keyless APIs integrated as both standalone commands and automatic news pipeline enrichment:
+Four free, keyless APIs with advanced filtering for market-moving event detection:
 
-| Source | API | Data | Update Frequency |
-|--------|-----|------|-----------------|
-| **GDELT** | `api.gdeltproject.org/api/v2/doc` | Global news articles + volume timeline | Real-time (rate: 1 req/5s) |
-| **USGS** | `earthquake.usgs.gov/earthquakes/feed` | M4.5+ earthquakes with PAGER alerts | Every minute |
-| **NASA EONET** | `eonet.gsfc.nasa.gov/api/v3/events` | Wildfires, cyclones, volcanoes, floods | Hourly |
-| **GDACS** | `gdacs.org/gdacsapi/api/events` | Disaster alerts (Green/Orange/Red) with humanitarian impact | Real-time |
+| Source | APIs Used | Capabilities |
+|--------|-----------|-------------|
+| **GDELT** | DOC, GEO, TV (3 endpoints) | Article search, tone/sentiment analysis, geographic clustering, TV broadcast monitoring, 15 structured theme codes, language/country filtering, near/repeat operators |
+| **USGS** | Feed + Query API (2 endpoints) | Earthquake feeds (significant/4.5+/month), advanced query with alertlevel, minmag, minsig, tsunami, felt filters |
+| **NASA EONET** | Events API | 13 categories (wildfires, storms, volcanoes, floods, landslides...), magnitude filtering, bounding box queries |
+| **GDACS** | Events API | 6 disaster types, Green/Orange/Red alerts, population exposure, vulnerability scores |
 
-All sources are fetched in parallel via `fetchAllGeopoliticalEvents()` and automatically merged into the `NewsAggregator.fetchAll()` pipeline alongside RSS and Telegram. Events are converted to `NewsItem` format for seamless matching against Polymarket.
+**Key functions:**
 
-GDELT also provides a unique `timelinevol` mode — media volume intensity over time for any topic, useful for detecting building narratives before markets price them in.
+- `fetchHighSignalAlerts()` — unified high-severity alert feed across all sources, sorted by criticality (critical > high > medium). Deduplicates earthquakes across significant/alert/tsunami feeds.
+- `fetchGdeltByTheme(key)` — 15 structured themes: elections, protests, terror, armedConflict, ceasefires, sanctions, pandemic, nuclearWeapons, coupAttempt, etc.
+- `fetchGdeltTone(query, days)` — global media sentiment over time (negative = bearish coverage, positive = bullish)
+- `fetchGdeltTvMentions(query)` — US cable news mention counts by station (last 24h)
+- `fetchGdeltGeo(query)` — geographic clustering of coverage
+- `fetchHighSignalQuakes()` — merges significant + orange/red alert + tsunami quakes
+- `fetchHighImpactEonetEvents()` — only severe storms, wildfires, volcanoes
+
+All sources are fetched in parallel via `fetchAllGeopoliticalEvents()` and automatically merged into the `NewsAggregator.fetchAll()` pipeline alongside RSS and Telegram.
 
 ### Resolution Calendar (`calendar.ts`)
 
@@ -400,7 +408,7 @@ Virtual balance starts at $1,000. Positions track:
 
 Sells calculate realized P&L. The `getPortfolioValue()` function enriches positions with live prices and unrealized P&L.
 
-## Presentation Layer (`ui.ts`, ~1,300 LOC)
+## Presentation Layer (`ui.ts`, ~1,400 LOC)
 
 ### Color Palette
 
@@ -451,6 +459,10 @@ Accent:  #A78BFA (soft violet)       #60A5FA (cool blue)
 | `printSocialSignals()` | signals | Sentiment bar, top Reddit posts |
 | `printEventTree()` | event-tree | ASCII tree with probability bars |
 | `printDigest()` | digest | Combined daily report |
+| `printGeoEvents()` | geo events, geo gdelt | Geopolitical event list with alert coloring |
+| `printGdeltTimeline()` | geo gdelt --timeline | Volume intensity bar chart |
+| `printGeoAlerts()` | geo alerts | Severity-badged alert dashboard (critical/high/medium) |
+| `printGdeltTone()` | geo tone | Diverging sentiment bar chart (positive/negative) |
 
 ### Utility Functions
 
