@@ -51,6 +51,7 @@ import {
   printGdeltTimeline,
   printGeoAlerts,
   printGdeltTone,
+  printExpiringScan,
 } from "./ui.js";
 import { addToWatchlist, removeFromWatchlist, getWatchlist, clearWatchlist } from "./watchlist.js";
 import { isTelegramConfigured } from "./news/index.js";
@@ -81,6 +82,7 @@ import {
 } from "./news/geopolitical.js";
 import type { GdeltThemeKey } from "./news/geopolitical.js";
 import type { BetRecommendation, Market, MarketMatch, NewsItem } from "./types/index.js";
+import { scanExpiringMarkets } from "./strategy/expiring.js";
 import fs from "fs";
 
 const config = loadConfig();
@@ -1562,6 +1564,45 @@ geoCmd
       allRecs.sort((a, b) => b.expectedValue - a.expectedValue);
       printRecommendations(allRecs.slice(0, 10));
       logRecommendations(allRecs.slice(0, 10));
+    }
+
+    printTimestamp();
+  });
+
+// ── expiring ──
+program
+  .command("expiring")
+  .description("Scan markets expiring today, find edge opportunities")
+  .option("-h, --hours <n>", "hours ahead to scan (default: 24)", "24")
+  .option("--min-liquidity <n>", "minimum liquidity in USD (default: 500)", "500")
+  .option("--no-news", "skip news matching, just list expiring markets")
+  .action(async (opts) => {
+    printHeader();
+
+    const hoursAhead = Number(opts.hours);
+    const minLiquidity = Number(opts.minLiquidity);
+
+    console.log(chalk.hex("#6B7280")(`  Scanning for markets expiring within ${hoursAhead}h...`));
+    console.log();
+
+    let newsItems: NewsItem[] = [];
+    if (opts.news !== false) {
+      console.log(chalk.hex("#6B7280")("  Fetching news for edge analysis..."));
+      newsItems = await newsAgg.fetchAll();
+      console.log(chalk.hex("#6B7280")(`  ${newsItems.length} news items loaded.`));
+      console.log();
+    }
+
+    const result = await scanExpiringMarkets(
+      polymarket, matcher, recommender, newsItems,
+      { hoursAhead, minLiquidity }
+    );
+
+    printExpiringScan(result);
+
+    // Log recommendations to history
+    if (result.recommendations.length > 0) {
+      logRecommendations(result.recommendations);
     }
 
     printTimestamp();

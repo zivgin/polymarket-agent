@@ -13,6 +13,7 @@ import type {
 } from "./types/index.js";
 import type { PortfolioRisk } from "./strategy/portfolio-risk.js";
 import type { GeoAlert, GdeltToneResult } from "./news/geopolitical.js";
+import type { ExpiringMarket, ExpiringScanResult, PricingAnomaly } from "./strategy/expiring.js";
 
 // ── Color Palette ──
 // Financial terminal: dark bg assumed, cyan data, amber prices, green/red signals
@@ -1444,4 +1445,87 @@ function wideBar(value: number, width: number): string {
     }
   }
   return bar;
+}
+
+// ── Expiring Markets ──
+
+export function printExpiringScan(result: ExpiringScanResult) {
+  printSectionHeader("Expiring Markets Scanner", "⏰");
+  console.log();
+  console.log(
+    `  ${c.dim("scanned")} ${c.value(new Date(result.scannedAt).toLocaleString())}  ` +
+    `${c.dim("active markets")} ${c.value(String(result.totalActive))}  ` +
+    `${c.dim("expiring")} ${c.brand(String(result.expiringToday.length))}`
+  );
+  console.log();
+
+  if (result.expiringToday.length === 0) {
+    console.log(c.dim("  No markets expiring in this window."));
+    console.log();
+    return;
+  }
+
+  // Group by urgency
+  const imminent = result.expiringToday.filter((e) => e.urgency === "imminent");
+  const today = result.expiringToday.filter((e) => e.urgency === "today");
+  const tonight = result.expiringToday.filter((e) => e.urgency === "tonight");
+
+  const printGroup = (label: string, icon: string, items: ExpiringMarket[]) => {
+    if (items.length === 0) return;
+    console.log(`  ${c.brand(icon + " " + label)} ${c.dim(`(${items.length})`)}`);
+    console.log();
+
+    for (const exp of items) {
+      const hoursStr = exp.hoursUntilExpiry < 1
+        ? c.short(`${Math.round(exp.hoursUntilExpiry * 60)}m`)
+        : exp.hoursUntilExpiry < 3
+          ? c.warn(`${exp.hoursUntilExpiry.toFixed(1)}h`)
+          : c.value(`${exp.hoursUntilExpiry.toFixed(1)}h`);
+
+      console.log(`    ${c.value(exp.market.question)}`);
+      console.log(
+        `      ${c.dim("expires")} ${hoursStr}  ` +
+        `${c.dim("YES")} ${c.long((exp.yesPrice * 100).toFixed(0) + "¢")}  ` +
+        `${c.dim("NO")} ${c.short((exp.noPrice * 100).toFixed(0) + "¢")}  ` +
+        `${c.dim("vol")} ${c.amber("$" + formatVolume(exp.market.volume))}  ` +
+        `${c.dim("liq")} ${c.amber("$" + formatVolume(exp.market.liquidity))}`
+      );
+      console.log();
+    }
+  };
+
+  printGroup("IMMINENT (< 3h)", "🔴", imminent);
+  printGroup("TODAY (3-8h)", "🟡", today);
+  printGroup("TONIGHT (8-24h)", "🟢", tonight);
+
+  // Pricing anomalies
+  if (result.anomalies.length > 0) {
+    console.log(`  ${c.brand("⚡ PRICING SIGNALS")} ${c.dim(`(${result.anomalies.length})`)}`);
+    console.log();
+
+    for (const a of result.anomalies) {
+      const icon = a.type === "arb" ? c.long("◆ ARB") : a.type === "uncertain" ? c.warn("◆ UNCERTAIN") : c.short("◆ MISPRICED");
+      const hoursStr = a.hoursUntilExpiry < 1
+        ? c.short(`${Math.round(a.hoursUntilExpiry * 60)}m`)
+        : c.value(`${a.hoursUntilExpiry.toFixed(1)}h`);
+
+      console.log(`    ${icon}  ${c.value(a.market.question)}`);
+      console.log(`      ${c.dim("expires")} ${hoursStr}  ${c.dim(a.detail)}`);
+      console.log();
+    }
+  }
+
+  // Recommendations
+  if (result.recommendations.length > 0) {
+    printRecommendations(result.recommendations);
+  } else {
+    console.log(c.dim("  No edge-based recommendations found for expiring markets."));
+    console.log();
+  }
+}
+
+function formatVolume(v: number): string {
+  if (v >= 1_000_000) return (v / 1_000_000).toFixed(1) + "M";
+  if (v >= 1_000) return (v / 1_000).toFixed(1) + "K";
+  return v.toFixed(0);
 }

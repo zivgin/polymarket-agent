@@ -5,7 +5,7 @@
 ```
 ┌────────────────────────────────────────────────────────────────────────┐
 │                            CLI Layer (~1,400 LOC)                      │
-│  cli.ts — 34 commands via Commander.js, orchestrates all modules       │
+│  cli.ts — 35 commands via Commander.js, orchestrates all modules       │
 ├────────────────────────────────────────────────────────────────────────┤
 │                       Presentation Layer (~1,400 LOC)                  │
 │  ui.ts — 43 exported functions: tables, bars, cards, dashboards        │
@@ -49,7 +49,7 @@
 ```
 polymarket-agent/
 ├── src/
-│   ├── cli.ts                    # Entry point — 34 command groups
+│   ├── cli.ts                    # Entry point — 35 command groups
 │   ├── config.ts                 # Environment variable loading + defaults
 │   ├── ui.ts                     # Terminal rendering (41 print functions)
 │   ├── export.ts                 # JSON/CSV file serialization
@@ -84,7 +84,8 @@ polymarket-agent/
 │   │   ├── backtest.ts           # Historical accuracy + calibration
 │   │   ├── liquidity.ts          # Orderbook depth + spread analysis
 │   │   ├── portfolio-risk.ts     # Concentration + correlation + hedging
-│   │   └── event-graph.ts        # Event probability tree + anomaly detection
+│   │   ├── event-graph.ts        # Event probability tree + anomaly detection
+│   │   └── expiring.ts           # Expiring market scanner + pricing anomalies
 │   │
 │   ├── utils/
 │   │   └── odds.ts               # Odds format conversion + edge math
@@ -303,6 +304,19 @@ Concentration and correlation analysis:
 - **Directional risk** — Flags if all positions are same side (all YES or all NO)
 - **Hedge suggestions** — Alerts on >50% concentration, suggests opposing positions
 
+### Expiring Market Scanner (`strategy/expiring.ts`)
+
+Scans for markets resolving within a configurable time window (default 24h):
+
+1. **Market fetch** — Fetches 1,000 active markets (2 pages of 500)
+2. **Expiry filter** — Filters to markets with `endDate` between now and cutoff, minimum liquidity threshold
+3. **Urgency grouping** — Imminent (<3h), Today (3-8h), Tonight (8-24h)
+4. **Pricing anomaly detection:**
+   - **Arb** — YES + NO < 98¢ (buy both sides for guaranteed profit)
+   - **Mispriced sum** — YES + NO > 102¢ (overpriced)
+   - **Uncertain** — YES price between 35-65¢ with >$5K volume (high uncertainty near expiry)
+5. **News cross-reference** — Matches news items to expiring markets using keyword overlap + entity matching, then runs through BetRecommender for edge-based recommendations
+
 ### Event Graph (`strategy/event-graph.ts`)
 
 Groups markets by event and checks probability consistency:
@@ -458,6 +472,7 @@ Accent:  #A78BFA (soft violet)       #60A5FA (cool blue)
 | `printComparison()` | compare | Two-column side-by-side market view |
 | `printSocialSignals()` | signals | Sentiment bar, top Reddit posts |
 | `printEventTree()` | event-tree | ASCII tree with probability bars |
+| `printExpiringScan()` | expiring | Urgency-grouped expiring markets + pricing signals |
 | `printDigest()` | digest | Combined daily report |
 | `printGeoEvents()` | geo events, geo gdelt | Geopolitical event list with alert coloring |
 | `printGdeltTimeline()` | geo gdelt --timeline | Volume intensity bar chart |

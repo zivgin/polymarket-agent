@@ -33,6 +33,11 @@ scan [options]            # Scan news → match markets → recommend bets
   --min-confidence <n>    # Threshold (default: 0.6)
   --export <file>         # Export results (.json or .csv)
 
+expiring [options]        # Scan markets expiring today, find edge opportunities
+  -h, --hours <n>         # Hours ahead to scan (default: 24)
+  --min-liquidity <n>     # Minimum liquidity in USD (default: 500)
+  --no-news               # Skip news matching, just list expiring markets
+
 news [-l <n>]             # Show latest news from all sources
 recommend <url>           # Scrape article, find matching markets, recommend
 live [-i <seconds>]       # Continuous monitoring (default: 300s poll)
@@ -269,10 +274,11 @@ For **same-day individual game betting** (spreads, O/U, props), traditional spor
 
 The tool's automated edge detection is conservative. For manual edge-hunting:
 
-1. **Compare Polymarket vs sportsbook odds** — Polymarket futures often lag behind sportsbook line movements
-2. **Watch 40-60¢ markets** — These are where mispricing is most likely
-3. **Cross-reference data sources** — Use `geo scan`, `news`, and web search to form your own probability estimate, then compare to market price
-4. **Check volume** — Low-volume markets (<$50K) may be mispriced but are hard to enter/exit
+1. **Use `expiring`** — Markets resolving within hours have the most actionable edge; the `expiring` command flags pricing anomalies (arb, mispriced sums, high-uncertainty) automatically
+2. **Compare Polymarket vs sportsbook odds** — Polymarket futures often lag behind sportsbook line movements
+3. **Watch 40-60¢ markets** — These are where mispricing is most likely
+4. **Cross-reference data sources** — Use `geo scan`, `news`, and web search to form your own probability estimate, then compare to market price
+5. **Check volume** — Low-volume markets (<$50K) may be mispriced but are hard to enter/exit
 
 ## Configuration
 
@@ -330,10 +336,13 @@ State files are stored in the project root as JSON (all gitignored):
 ## Example Workflow
 
 ```bash
-# 1. Full news scan — match all feeds to markets
+# 1. Scan expiring markets for immediate opportunities
+npx tsx src/cli.ts expiring --hours 6
+
+# 2. Full news scan — match all feeds to markets
 npx tsx src/cli.ts scan
 
-# 2. Geopolitical scan — earthquakes, disasters, conflicts
+# 3. Geopolitical scan — earthquakes, disasters, conflicts
 npx tsx src/cli.ts geo scan
 
 # 3. Search specific markets
